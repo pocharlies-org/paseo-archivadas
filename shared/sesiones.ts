@@ -55,13 +55,22 @@ export function ordenar(sesiones: readonly Sesion[]): Sesion[] {
   return [...sesiones].sort((a, b) => msDe(b.ultimaActividad) - msDe(a.ultimaActividad) || a.clave.localeCompare(b.clave));
 }
 
+const compacta = (texto: string): string => texto.replace(/\s+/g, " ").trim();
+
 function unico(...partes: readonly (string | null | undefined)[]): string {
   const vistas: string[] = [];
   for (const parte of partes) {
-    const limpia = parte?.replace(/\s+/g, " ").trim();
+    const limpia = parte ? compacta(parte) : "";
     if (limpia && !vistas.includes(limpia)) vistas.push(limpia);
   }
   return vistas.join(" · ");
+}
+
+/** The row shows two lines of title: Paseo's title of a session with none is its whole first prompt, which can be kilobytes. */
+const MAX_TITULO = 160;
+function titulo(texto: string | null | undefined): string {
+  const limpio = texto ? compacta(texto) : "";
+  return limpio.length > MAX_TITULO ? `${limpio.slice(0, MAX_TITULO - 1).trimEnd()}…` : limpio;
 }
 
 /**
@@ -108,7 +117,7 @@ export function fusionar(input: {
       providerLabel: reciente.providerLabel,
       providerHandleId: reciente.providerHandleId,
       cwd: reciente.cwd,
-      titulo: reciente.title?.trim() || reciente.firstPromptPreview?.trim() || "Sin título",
+      titulo: titulo(reciente.title) || titulo(reciente.firstPromptPreview) || "Sin título",
       resumen: unico(reciente.firstPromptPreview, reciente.lastPromptPreview),
       ultimoPrompt: unico(reciente.lastPromptPreview),
       ultimaActividad: reciente.lastActivityAt,
@@ -130,7 +139,7 @@ export function fusionar(input: {
       providerLabel: agente.provider,
       providerHandleId: handle,
       cwd: agente.cwd,
-      titulo: agente.title?.trim() || "Sin título",
+      titulo: titulo(agente.title) || "Sin título",
       resumen: "",
       ultimoPrompt: "",
       ultimaActividad: ultimaActividadDe(agente),
@@ -149,7 +158,7 @@ export function fusionar(input: {
       providerLabel: agente.provider,
       providerHandleId: "",
       cwd: agente.cwd,
-      titulo: agente.title?.trim() || "Sin título",
+      titulo: titulo(agente.title) || "Sin título",
       resumen: "",
       ultimoPrompt: "",
       ultimaActividad: ultimaActividadDe(agente),
@@ -231,16 +240,16 @@ export function etiquetaArchivada(sesion: Sesion, ahora: Date = new Date()): str
   return ["Archivada", fecha, sesion.historial === "no" ? "sin historial" : ""].filter(Boolean).join(" · ");
 }
 
-const norm = (texto: string) => texto.replace(/\s+/g, " ").trim();
-
 /**
- * The line under a row's title: the last prompt of the session, unless it says nothing the title does not. Skipped when it
- * starts the same as the title, and when it is not something the user wrote (the tags Claude Code injects, the summary it
- * writes when a conversation continues in a new session).
+ * The line under a row's title: the last prompt of the session, unless it says nothing the title does not. Skipped when one
+ * starts the same as the other (a title is the first prompt cut short), and when it is not something the user wrote (the
+ * tags Claude Code injects, the summary it writes when a conversation continues in a new session).
  */
 export function subtituloDe(sesion: Sesion): string {
-  const ultimo = norm(sesion.ultimoPrompt);
+  const ultimo = compacta(sesion.ultimoPrompt);
   if (!ultimo || ultimo.startsWith("<") || ultimo.startsWith("This session is being continued")) return "";
-  const titulo = norm(sesion.titulo).replace(/…$/, "").trimEnd();
-  return titulo && ultimo.startsWith(titulo) ? "" : ultimo;
+  const cabeza = (texto: string) => texto.replace(/…$/, "").trimEnd();
+  const principio = cabeza(compacta(sesion.titulo));
+  if (!principio) return ultimo;
+  return ultimo.startsWith(principio) || principio.startsWith(cabeza(ultimo)) ? "" : ultimo;
 }

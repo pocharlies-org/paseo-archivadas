@@ -167,12 +167,26 @@ test("fusionar: titles and summaries fall back sensibly", () => {
     destino,
     canon,
   });
-  assert.equal(fila?.titulo, "hola   mundo", "no title: the first prompt");
+  assert.equal(fila?.titulo, "hola mundo", "no title: the first prompt, whitespace collapsed");
   assert.equal(fila?.resumen, "hola mundo", "equal previews are shown once, whitespace collapsed");
   const [vacia] = fusionar({ recientes: [reciente("h", { title: null, firstPromptPreview: null, lastPromptPreview: null })], agentes: [], destino, canon });
   assert.equal(vacia?.titulo, "Sin título");
   const [archivada] = fusionar({ recientes: [], agentes: [agente({ id: "1", title: null })], destino, canon });
   assert.equal(archivada?.titulo, "Sin título");
+});
+
+test("fusionar: a long title (Paseo's title of a session with none is its whole first prompt) is cut to two lines' worth", () => {
+  const largo = `Comprobación diaria\n\n${"palabra ".repeat(500)}`;
+  const [fila, archivada] = fusionar({
+    recientes: [reciente("h", { title: largo })],
+    agentes: [agente({ id: "x", title: largo })],
+    destino,
+    canon,
+  }) as [Sesion, Sesion];
+  assert.ok(fila.titulo.length <= 160, `${fila.titulo.length} chars`);
+  assert.ok(fila.titulo.startsWith("Comprobación diaria palabra palabra"));
+  assert.ok(fila.titulo.endsWith("…"));
+  assert.ok(archivada.titulo.length <= 160);
 });
 
 test("ordenar: newest first, no date last, ties by key", () => {
@@ -285,6 +299,7 @@ test("subtituloDe: the last prompt, unless it only repeats the title or is not s
   assert.equal(subtituloDe(fila("Revisa el proyecto", "ahora el segundo punto")), "ahora el segundo punto");
   assert.equal(subtituloDe(fila("Revisa el proyecto", "Revisa el proyecto")), "", "same as the title");
   assert.equal(subtituloDe(fila("crea un post  igual que… ", "crea un post igual que ha echo arnau")), "", "a truncated title is a prefix of its prompt, whitespace aside");
+  assert.equal(subtituloDe(fila("Comprobación diaria de keep-alive de la sesión de Hermes y mucho más texto…", "Comprobación diaria de keep-alive de la sesión")), "", "a last prompt cut shorter than the title is a prefix of it");
   assert.equal(subtituloDe(fila("Título", "<task-notification>x</task-notification>")), "", "injected tags");
   assert.equal(subtituloDe(fila("Título", "This session is being continued from a previous conversation")), "", "continuation summary");
   assert.equal(subtituloDe(fila("Título", "")), "");
