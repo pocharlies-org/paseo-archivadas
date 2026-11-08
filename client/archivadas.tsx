@@ -39,6 +39,11 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
   const datos = new Map<string, DatosWorkspace>();
   const botones = new Map<string, PluginButtonRegistration>();
 
+  const resuelveWorkspace = async (workspaceId: string): Promise<DatosWorkspace | null> => {
+    const w = await client.paseo.workspaces.ref(workspaceId).refresh();
+    return w && !w.archivingAt ? destinoDe(w) : null;
+  };
+
   // One button per workspace the host lists: added when it appears, removed when it goes (or starts archiving).
   const sincroniza = () => {
     if (lifetime.signal.aborted) return;
@@ -110,15 +115,13 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
     const { height } = useWindowDimensions();
 
     useEffect(() => {
-      const destino = datos.get(workspaceId);
-      if (!destino) {
-        setEstado({ fase: "error", mensaje: "Este workspace ya no existe" });
-        return;
-      }
       let cancelado = false;
       setEstado({ fase: "cargando" });
       void (async () => {
         try {
+          // A panel restored with the page can mount before the workspace subscription has answered: ask the host then.
+          const destino = datos.get(workspaceId) ?? (await resuelveWorkspace(workspaceId));
+          if (!destino) throw new Error("Este workspace ya no existe");
           const { sesiones, avisos } = await client.rpc(archivadasList, { workspaceId, cwd: destino.cwd, projectKey: destino.projectKey });
           // The list is shown once it knows which archived rows still have their history: no row flips from yellow to dim.
           const pendientes = porComprobar(sesiones);
@@ -256,18 +259,21 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
   };
 }
 
+/** The part of a workspace descriptor the list needs: where its sessions live and which project its agents belong to. */
+interface Descriptor {
+  readonly id: string;
+  readonly projectId: string;
+  readonly projectRootPath: string;
+  readonly workspaceDirectory?: string;
+  readonly archivingAt?: string | null;
+}
+const destinoDe = (w: Descriptor): DatosWorkspace => ({ cwd: w.workspaceDirectory ?? w.projectRootPath, projectKey: w.projectId || null });
+
 /** Keeps `datos` equal to the workspaces the host lists (directory and project key), and calls `cambio` when it changes. */
 function vigilaWorkspaces(client: PluginClientContext, signal: AbortSignal, datos: Map<string, DatosWorkspace>, cambio: () => void): () => void {
-  type Descriptor = {
-    readonly id: string;
-    readonly projectId: string;
-    readonly projectRootPath: string;
-    readonly workspaceDirectory?: string;
-    readonly archivingAt?: string | null;
-  };
   const anota = (w: Descriptor) => {
     if (w.archivingAt) datos.delete(w.id);
-    else datos.set(w.id, { cwd: w.workspaceDirectory ?? w.projectRootPath, projectKey: w.projectId || null });
+    else datos.set(w.id, destinoDe(w));
   };
   let soltar: (() => void) | null = null;
   let suscripcion: { release(): Promise<void> } | null = null;
