@@ -22,7 +22,15 @@ export interface AgenteHistorial {
   readonly archivedAt?: string | null;
   readonly updatedAt?: string | null;
   readonly lastUserMessageAt?: string | null;
-  readonly persistence?: { readonly sessionId?: string | null; readonly nativeHandle?: string | null } | null;
+  readonly persistence?: {
+    readonly provider?: string | null;
+    readonly sessionId?: string | null;
+    readonly nativeHandle?: string | null;
+  } | null;
+  /**
+   * What the live provider process reports. Deliberately not a handle: the daemon matches an import on `persistence` only, so
+   * a session known just from here is not restorable (`importAgent` would create a new agent instead of bringing this one back).
+   */
   readonly runtimeInfo?: { readonly sessionId?: string | null } | null;
 }
 
@@ -31,12 +39,28 @@ export interface Destino {
   readonly cwd: string;
 }
 
-/** The provider session an agent runs: the key the daemon matches on when it imports. */
-export function handleDe(agente: AgenteHistorial): string | null {
-  return agente.persistence?.nativeHandle ?? agente.persistence?.sessionId ?? agente.runtimeInfo?.sessionId ?? null;
+/**
+ * The handles of the provider session an agent runs, the native one first. The daemon matches an import against BOTH
+ * `persistence.sessionId` and `persistence.nativeHandle` (it keeps the two keys of every agent it has), so either names the
+ * agent. Only `persistence` counts: a handle that is just in `runtimeInfo` is not one the daemon can restore.
+ */
+export function handlesDe(agente: AgenteHistorial): string[] {
+  const handles = [agente.persistence?.nativeHandle, agente.persistence?.sessionId].filter((h): h is string => typeof h === "string" && h !== "");
+  return [...new Set(handles)];
 }
 
+/** The handle a row of this agent imports with: the native one, else the session id; null when it never had a provider session. */
+export function handleDe(agente: AgenteHistorial): string | null {
+  return handlesDe(agente)[0] ?? null;
+}
+
+/** The provider the daemon matches on: the one of the persisted session, which is the agent's own unless the record says otherwise. */
+export const proveedorDe = (agente: AgenteHistorial): string => agente.persistence?.provider || agente.provider;
+
 export const claveDe = (providerId: string, handle: string) => `${providerId}\u0000${handle}`;
+
+/** Every key (provider plus handle) the daemon would match this agent on. */
+export const clavesDe = (agente: AgenteHistorial): string[] => handlesDe(agente).map((handle) => claveDe(proveedorDe(agente), handle));
 
 /** An archived agent belongs to the list of a workspace when it lived there or in the same directory (realpath-resolved). */
 export function esDelWorkspace(agente: AgenteHistorial, destino: Destino, canon: (ruta: string) => string): boolean {
@@ -57,10 +81,32 @@ export function ordenar(sesiones: readonly Sesion[]): Sesion[] {
 
 const compacta = (texto: string): string => texto.replace(/\s+/g, " ").trim();
 
+const ENTIDADES_XML: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+// `<paseo-system version="1" kind="agent-message" source-agent-id="…" …>`, the text, `</paseo-system>`: what Paseo's
+// `formatAgentMessage` writes, attribute values and text escaped, and the legacy `<paseo-system>` of the schedules.
+const APERTURA_PASEO = /^<paseo-system(?=[\s>])[^>]*>/;
+const CIERRE_PASEO = "</paseo-system>";
+
+/**
+ * The text of a prompt an agent sent to another one: Paseo wraps it in a `<paseo-system …>` envelope, and a session whose first
+ * prompt is such a message gets that envelope as its title. Anything else is returned as it came. The closing tag may be
+ * missing (a preview is cut at a fixed length), and an envelope cut inside its own opening tag has no text to show: that is
+ * the empty string, not the half tag. Linear in the text (no regex over it): a title can be kilobytes.
+ */
+export function desenvuelve(texto: string): string {
+  const limpio = texto.trim();
+  if (!/^<paseo-system(?=[\s>]|$)/.test(limpio)) return texto;
+  const apertura = APERTURA_PASEO.exec(limpio);
+  if (!apertura) return "";
+  let interior = limpio.slice(apertura[0].length).trim();
+  if (interior.endsWith(CIERRE_PASEO)) interior = interior.slice(0, -CIERRE_PASEO.length).trimEnd();
+  return interior.replace(/&(amp|lt|gt|quot|apos);/g, (_, entidad: string) => ENTIDADES_XML[entidad] ?? "");
+}
+
 function unico(...partes: readonly (string | null | undefined)[]): string {
   const vistas: string[] = [];
   for (const parte of partes) {
-    const limpia = parte ? compacta(parte) : "";
+    const limpia = parte ? compacta(desenvuelve(parte)) : "";
     if (limpia && !vistas.includes(limpia)) vistas.push(limpia);
   }
   return vistas.join(" · ");
@@ -69,15 +115,19 @@ function unico(...partes: readonly (string | null | undefined)[]): string {
 /** The row shows two lines of title: Paseo's title of a session with none is its whole first prompt, which can be kilobytes. */
 const MAX_TITULO = 160;
 function titulo(texto: string | null | undefined): string {
-  const limpio = texto ? compacta(texto) : "";
+  const limpio = texto ? compacta(desenvuelve(texto)) : "";
   return limpio.length > MAX_TITULO ? `${limpio.slice(0, MAX_TITULO - 1).trimEnd()}…` : limpio;
 }
 
 /**
  * The importable sessions plus the archived agents of the destination workspace, one row per provider session.
+ * - An agent is known by every handle the daemon matches it on (its session id and its native handle, under the provider of
+ *   its persisted session), so a record that carries one of them is the same session as a listing that carries the other.
  * - The archived record wins: its id is what the daemon brings back, and the row is marked.
  * - An archived record whose session is also running as a live agent is dropped: importing it fails («already imported»).
  * - With several archived records of one session, the most recently archived one stays (the daemon picks the same kind of match).
+ * - An archived agent with no persisted session (even if its live process once reported one) cannot be restored: the import
+ *   would start a new agent. It is a dead end from the start.
  * - Rows are born with `historial` set from what is known without touching disk: a session the daemon lists has its history,
  *   an archived agent that never had a provider session has none, and any other archived one is still to be checked.
  */
@@ -90,22 +140,30 @@ export function fusionar(input: {
   const { recientes, agentes, destino, canon } = input;
   const vivos = new Set<string>();
   for (const agente of agentes) {
-    const handle = handleDe(agente);
-    if (handle && !agente.archivedAt) vivos.add(claveDe(agente.provider, handle));
+    if (agente.archivedAt) continue;
+    for (const clave of clavesDe(agente)) vivos.add(clave);
   }
-  const archivadas = new Map<string, AgenteHistorial>();
+  // One entry per archived session: `grupos` keeps its newest record and every key any of its records carries, `grupoDe` finds
+  // the group from one of those keys.
+  const grupos = new Map<string, { agente: AgenteHistorial; claves: Set<string> }>();
+  const grupoDe = new Map<string, string>();
   const sinSesion: AgenteHistorial[] = [];
   for (const agente of agentes) {
     if (!esDelWorkspace(agente, destino, canon)) continue;
-    const handle = handleDe(agente);
-    if (!handle) {
+    const claves = clavesDe(agente);
+    if (claves.length === 0) {
       sinSesion.push(agente);
       continue;
     }
-    const clave = claveDe(agente.provider, handle);
-    if (vivos.has(clave)) continue;
-    const previa = archivadas.get(clave);
-    if (!previa || msDe(agente.archivedAt) > msDe(previa.archivedAt)) archivadas.set(clave, agente);
+    if (claves.some((clave) => vivos.has(clave))) continue;
+    const nombre = claves.map((clave) => grupoDe.get(clave)).find((grupo) => grupo !== undefined) ?? (claves[0] as string);
+    const grupo = grupos.get(nombre) ?? { agente, claves: new Set<string>() };
+    if (msDe(agente.archivedAt) > msDe(grupo.agente.archivedAt)) grupo.agente = agente;
+    for (const clave of claves) {
+      grupo.claves.add(clave);
+      grupoDe.set(clave, nombre);
+    }
+    grupos.set(nombre, grupo);
   }
 
   const filas = new Map<string, Sesion>();
@@ -125,18 +183,20 @@ export function fusionar(input: {
       historial: "si",
     });
   }
-  for (const [clave, agente] of archivadas) {
-    const handle = handleDe(agente) ?? "";
+  for (const { agente, claves } of grupos.values()) {
     const marca = { agentId: agente.id, archivadaEn: agente.archivedAt ?? "" };
-    const fila = filas.get(clave);
-    if (fila) {
-      filas.set(clave, { ...fila, archivada: marca });
+    const coincidentes = [...claves].filter((clave) => filas.has(clave));
+    if (coincidentes.length > 0) {
+      for (const clave of coincidentes) filas.set(clave, { ...(filas.get(clave) as Sesion), archivada: marca });
       continue;
     }
+    const handle = handleDe(agente) ?? "";
+    const proveedor = proveedorDe(agente);
+    const clave = claveDe(proveedor, handle);
     filas.set(clave, {
       clave,
-      providerId: agente.provider,
-      providerLabel: agente.provider,
+      providerId: proveedor,
+      providerLabel: proveedor,
       providerHandleId: handle,
       cwd: agente.cwd,
       titulo: titulo(agente.title) || "Sin título",
@@ -151,11 +211,12 @@ export function fusionar(input: {
   // An agent archived before it ever had a provider session has nothing to resume: it is listed (it is archived and of this
   // workspace) but it is a dead end from the start, with no handle to look up.
   for (const agente of sinSesion) {
-    const clave = `${agente.provider}\u0000agente:${agente.id}`;
+    const proveedor = proveedorDe(agente);
+    const clave = `${proveedor}\u0000agente:${agente.id}`;
     filas.set(clave, {
       clave,
-      providerId: agente.provider,
-      providerLabel: agente.provider,
+      providerId: proveedor,
+      providerLabel: proveedor,
       providerHandleId: "",
       cwd: agente.cwd,
       titulo: titulo(agente.title) || "Sin título",
@@ -191,6 +252,13 @@ export function porComprobar(sesiones: readonly Sesion[]): { provider: string; s
   return sesiones
     .filter((s) => s.archivada && s.historial === "desconocido")
     .map((s) => ({ provider: s.providerId, sessionId: s.providerHandleId, cwd: s.cwd }));
+}
+
+/** The list cut into batches of at most `tamano`, in order: the transcript lookup takes a bounded number of sessions per call. */
+export function enTandas<T>(lista: readonly T[], tamano: number): T[][] {
+  const tandas: T[][] = [];
+  for (let desde = 0; desde < lista.length; desde += tamano) tandas.push(lista.slice(desde, desde + tamano));
+  return tandas;
 }
 
 /** A session can be brought back unless it is archived and its history is gone. */
