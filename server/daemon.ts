@@ -2,15 +2,47 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { AgenteHistorial, Reciente } from "../shared/sesiones.ts";
 
 /**
  * The three daemon calls this plugin needs. Paseo's plugin API (`PaseoApi`) has none of them: the listing of importable
  * sessions, the agent history with archived agents and the import are only on the daemon's own client, so the plugin
  * opens a short connection of its own, like the `paseo` CLI does (`paseo import` is the same `importAgent` call).
+ *
+ * The shape is declared here, not imported from `@getpaseo/client`: Paseo compiles a plugin from a bare git checkout, with
+ * no `node_modules`, and refuses one whose imports (types included) it cannot resolve. `test/conformidad.test.ts` checks at
+ * typecheck time that the daemon's own client still fits it.
  */
-export type Daemon = Pick<DaemonClient, "fetchRecentProviderSessions" | "fetchAgentHistory" | "importAgent" | "close">;
+export interface Daemon {
+  fetchRecentProviderSessions(options: { cwd?: string; limit?: number }): Promise<{
+    entries: Reciente[];
+    providerErrors?: { provider: string; message: string }[];
+  }>;
+  fetchAgentHistory(options: {
+    filter?: { includeArchived?: boolean; projectKeys?: string[] };
+    sort?: { key: "status_priority" | "created_at" | "updated_at" | "title"; direction: "asc" | "desc" }[];
+    page?: { limit: number; cursor?: string };
+  }): Promise<{
+    entries: { agent: AgenteHistorial }[];
+    pageInfo: { hasMore: boolean; nextCursor: string | null };
+  }>;
+  importAgent(input: { providerId: string; providerHandleId: string; cwd?: string; workspaceId?: string }): Promise<{ id: string }>;
+  close(): Promise<void>;
+}
 export type AbreDaemon = () => Promise<Daemon>;
+
+/** What the daemon's client takes to connect (the fields this plugin sets). */
+export interface ConfigCliente {
+  url: string;
+  clientId: string;
+  clientType: "cli";
+  password?: string;
+  localCredential?: () => string | undefined;
+  connectTimeoutMs?: number;
+  reconnect?: { enabled: boolean };
+}
+export type ConexionDaemon = Daemon & { connect(): Promise<void> };
+export type ClaseCliente = new (config: ConfigCliente) => ConexionDaemon;
 
 export interface EntornoDaemon {
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -64,7 +96,7 @@ const MODULO_CLIENTE = "@getpaseo/client/internal/daemon-client";
 
 type Cargador = (nombre: string) => unknown;
 
-function cargaCliente(carga: Cargador): typeof DaemonClient {
+function cargaCliente(carga: Cargador): ClaseCliente {
   let modulo: { DaemonClient?: unknown };
   try {
     modulo = carga(MODULO_CLIENTE) as { DaemonClient?: unknown };
@@ -72,7 +104,7 @@ function cargaCliente(carga: Cargador): typeof DaemonClient {
     throw new Error(`Este Paseo no deja cargar el cliente del daemon desde un plugin: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (typeof modulo.DaemonClient !== "function") throw new Error("El cliente del daemon de este Paseo no tiene la forma esperada");
-  return modulo.DaemonClient as typeof DaemonClient;
+  return modulo.DaemonClient as ClaseCliente;
 }
 
 /**
