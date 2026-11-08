@@ -1,6 +1,19 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
+/**
+ * Bounds of what the plugin's server accepts: it parses what comes over the RPC before it touches the disk or the daemon, so a
+ * client that is not this plugin's own cannot make it walk an unbounded list or hold an unbounded string. Paths are PATH_MAX;
+ * ids (workspace, project, provider, session handle) are far shorter than 200 in every provider. A lookup takes at most
+ * `MAX_COMPROBACIONES` sessions: the client sends a longer list in batches (`enTandas`).
+ */
+export const MAX_ID = 200;
+export const MAX_RUTA = 4096;
+export const MAX_COMPROBACIONES = 500;
+
+const Id = z.string().max(MAX_ID);
+const Ruta = z.string().max(MAX_RUTA);
+
 export const Historial = z.enum(["si", "no", "desconocido"]);
 export type Historial = z.infer<typeof Historial>;
 
@@ -30,11 +43,11 @@ export type Sesion = z.infer<typeof SesionSchema>;
 /** The importable sessions of a workspace merged with its archived agents, newest first. */
 export const archivadasList = defineRpc({
   name: "archivadas.list",
-  input: z.object({ workspaceId: z.string(), cwd: z.string(), projectKey: z.string().nullable() }).strict(),
+  input: z.object({ workspaceId: Id, cwd: Ruta, projectKey: Id.nullable() }).strict(),
   output: z.object({ sesiones: z.array(SesionSchema), avisos: z.array(z.string()) }),
 });
 
-const TranscriptIn = z.object({ provider: z.string(), sessionId: z.string(), cwd: z.string() }).strict();
+const TranscriptIn = z.object({ provider: Id, sessionId: Id, cwd: Ruta }).strict();
 export type TranscriptIn = z.infer<typeof TranscriptIn>;
 
 /** `existe` is null when the provider keeps its history somewhere this plugin cannot look: treat it as restorable. */
@@ -43,13 +56,14 @@ export type TranscriptOut = z.infer<typeof TranscriptOut>;
 
 export const transcriptsCheck = defineRpc({
   name: "archivadas.transcripts",
-  input: z.object({ sesiones: z.array(TranscriptIn) }).strict(),
-  output: z.object({ resultados: z.array(TranscriptOut) }),
+  input: z.object({ sesiones: z.array(TranscriptIn).max(MAX_COMPROBACIONES) }).strict(),
+  // One answer per session asked, so no more than the question had.
+  output: z.object({ resultados: z.array(TranscriptOut).max(MAX_COMPROBACIONES) }),
 });
 
 /** Brings a session back into a workspace (the daemon unarchives its agent when it has one) and returns the agent to open. */
 export const archivadasRestore = defineRpc({
   name: "archivadas.restaurar",
-  input: z.object({ providerId: z.string(), providerHandleId: z.string(), cwd: z.string(), workspaceId: z.string() }).strict(),
+  input: z.object({ providerId: Id, providerHandleId: Id, cwd: Ruta, workspaceId: Id }).strict(),
   output: z.object({ agentId: z.string() }),
 });

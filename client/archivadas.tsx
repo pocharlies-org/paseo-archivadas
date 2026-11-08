@@ -10,8 +10,9 @@ import { Icon, ScrollView, TextInput } from "@getpaseo/plugin/client/react-nativ
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, useWindowDimensions, View } from "react-native";
 import { conAlfa } from "../shared/color.ts";
-import { archivadasList, archivadasRestore, type Sesion, transcriptsCheck } from "../shared/contract.ts";
-import { buscar, conHistorial, etiquetaArchivada, hace, porComprobar, restaurable, subtituloDe } from "../shared/sesiones.ts";
+import { archivadasList, archivadasRestore, MAX_COMPROBACIONES, type Sesion, transcriptsCheck } from "../shared/contract.ts";
+import { buscar, conHistorial, enTandas, etiquetaArchivada, hace, porComprobar, restaurable, subtituloDe } from "../shared/sesiones.ts";
+import { type DatosWorkspace, destinoDe, vigilaWorkspaces } from "./workspaces.ts";
 
 type Tema = PluginHostProps["theme"];
 
@@ -21,11 +22,8 @@ const ID_PANTALLA_ABRIR = "abrir";
 const ID_PANEL = "archivadas";
 /** Rows drawn at once: a host with hundreds of sessions would otherwise draw them all every time the popover opens. */
 const FILAS_POR_TANDA = 60;
-
-interface DatosWorkspace {
-  readonly cwd: string;
-  readonly projectKey: string | null;
-}
+/** The search text never leaves the client, but nothing useful is typed past this. */
+const MAX_BUSQUEDA = 500;
 
 type Estado =
   | { readonly fase: "cargando" }
@@ -127,9 +125,14 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           const pendientes = porComprobar(sesiones);
           let conTodo: readonly Sesion[] = sesiones;
           if (pendientes.length > 0) {
-            // A failed lookup leaves the rows as restorable: the daemon refuses and rolls back what it cannot resume.
-            const { resultados } = await client.rpc(transcriptsCheck, { sesiones: pendientes }).catch(() => ({ resultados: [] }));
-            conTodo = conHistorial(sesiones, resultados);
+            // A failed lookup leaves the rows as restorable: the daemon refuses and rolls back what it cannot resume. The server
+            // takes a bounded number of sessions per call, so a long list goes in batches.
+            const respuestas = await Promise.all(
+              enTandas(pendientes, MAX_COMPROBACIONES).map((tanda) =>
+                client.rpc(transcriptsCheck, { sesiones: tanda }).catch(() => ({ resultados: [] })),
+              ),
+            );
+            conTodo = conHistorial(sesiones, respuestas.flatMap((r) => r.resultados));
           }
           if (!cancelado) setEstado({ fase: "listo", sesiones: conTodo, avisos });
         } catch (error) {
@@ -259,67 +262,6 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
   };
 }
 
-/** The part of a workspace descriptor the list needs: where its sessions live and which project its agents belong to. */
-interface Descriptor {
-  readonly id: string;
-  readonly projectId: string;
-  readonly projectRootPath: string;
-  readonly workspaceDirectory?: string;
-  readonly archivingAt?: string | null;
-}
-const destinoDe = (w: Descriptor): DatosWorkspace => ({ cwd: w.workspaceDirectory ?? w.projectRootPath, projectKey: w.projectId || null });
-
-/** Keeps `datos` equal to the workspaces the host lists (directory and project key), and calls `cambio` when it changes. */
-function vigilaWorkspaces(client: PluginClientContext, signal: AbortSignal, datos: Map<string, DatosWorkspace>, cambio: () => void): () => void {
-  const anota = (w: Descriptor) => {
-    if (w.archivingAt) datos.delete(w.id);
-    else datos.set(w.id, destinoDe(w));
-  };
-  let soltar: (() => void) | null = null;
-  let suscripcion: { release(): Promise<void> } | null = null;
-  type Paginacion = { readonly hasMore: boolean; readonly nextCursor: string | null };
-  // The subscription's snapshot is the first page: a host with more workspaces than one page holds reads the rest.
-  const leeResto = async (pageInfo: Paginacion) => {
-    let siguiente = pageInfo.hasMore ? pageInfo.nextCursor : null;
-    while (siguiente && !signal.aborted) {
-      const pagina = await client.paseo.workspaces.list({ page: { limit: 200, cursor: siguiente } });
-      for (const w of pagina.entries) anota(w);
-      siguiente = pagina.pageInfo.hasMore ? pagina.pageInfo.nextCursor : null;
-    }
-    cambio();
-  };
-  const falla = (error: unknown) => console.error("paseo-archivadas: no se pudo leer la lista de workspaces", error);
-  void client.paseo.workspaces
-    .list({ subscribe: {}, page: { limit: 200 } })
-    .then(({ subscription, entries, pageInfo }) => {
-      if (signal.aborted) return void subscription.release();
-      suscripcion = subscription;
-      soltar = subscription.subscribe({
-        snapshot: ({ entries: todas, pageInfo: paginas }) => {
-          datos.clear();
-          for (const w of todas) anota(w);
-          cambio();
-          void leeResto(paginas).catch(falla);
-        },
-        update: (mensaje) => {
-          if (mensaje.type !== "workspace_update") return;
-          const cambioDe = mensaje.payload;
-          if (cambioDe.kind === "upsert") anota(cambioDe.workspace);
-          else datos.delete(cambioDe.id);
-          cambio();
-        },
-      });
-      for (const w of entries) anota(w);
-      cambio();
-      return leeResto(pageInfo);
-    })
-    .catch(falla);
-  return () => {
-    soltar?.();
-    void suscripcion?.release();
-  };
-}
-
 function Buscador({ theme, texto, onChange }: { theme: Tema; texto: string; onChange(texto: string): void }) {
   const { colors } = theme;
   return (
@@ -343,6 +285,7 @@ function Buscador({ theme, texto, onChange }: { theme: Tema; texto: string; onCh
         placeholderTextColor={colors.foregroundMuted}
         autoCapitalize="none"
         autoCorrect={false}
+        maxLength={MAX_BUSQUEDA}
         accessibilityLabel="Buscar sesiones"
         // The web focus ring is the host's to draw; a second one inside the popover reads as a glitch.
         style={[{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 13, paddingVertical: 8 }, { outlineStyle: "none" } as object]}

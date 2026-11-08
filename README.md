@@ -43,7 +43,8 @@ the daemon it runs in.
 - A session that is both importable and archived is one row, and the archived record wins. An archived agent whose session
   is running as a live agent is hidden (importing it would fail).
 - Transcripts are looked up on the daemon host in `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-cwd>/<sessionId>.jsonl`,
-  then in every project folder. Other providers keep their history elsewhere: they are treated as restorable.
+  then in every project folder. `CLAUDE_CONFIG_DIR` is the one of the Claude provider's `env` in the Paseo `config.json`
+  (`agents.providers.claude.env`, what the daemon starts Claude with), else the plugin process's own, else `~/.claude`. Other providers keep their history elsewhere: they are treated as restorable.
 - Restoring runs `importAgent({providerId, providerHandleId, cwd, workspaceId})`. The daemon does it atomically (an archived
   agent whose provider cannot resume it is archived again). The row shows the error inline if it fails.
 
@@ -51,7 +52,7 @@ the daemon it runs in.
 
 - Archived agents the daemon's history does not list (the ones whose workspace was removed) are not marked: their sessions
   still appear in the native list when their transcript exists, unmarked.
-- The plugin reads `~/.paseo` (`paseo.pid`, `local-credential`) and the daemon's `PASEO_*` environment to connect; a daemon
+- The plugin reads `~/.paseo` (`paseo.pid`, `local-credential`, and from `config.json` only that one `CLAUDE_CONFIG_DIR` value) and the daemon's `PASEO_*` environment to connect; a daemon
   that listens only on a Unix socket is not supported.
 
 ## Development
