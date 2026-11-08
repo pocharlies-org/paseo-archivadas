@@ -1,0 +1,6 @@
+{
+  "id": "paseo-archivadas",
+  "name": "Sesiones y archivadas",
+  "description": "Un botón en la cabecera de cada workspace con las sesiones que puedes importar (las mismas que «Importar sesión») y todos los agentes archivados de ese workspace, estos en amarillo con «Archivada · fecha». Pulsa una fila y vuelve a este workspace y se abre. Las archivadas sin historial en disco salen apagadas y no se pueden restaurar.",
+  "requirements": { "paseo": ">=0.11.2" }
+}

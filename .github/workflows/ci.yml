@@ -1,0 +1,28 @@
+name: CI
+
+# No secrets anywhere in this workflow: it runs the code of the pull request on the self-hosted runners. `pull_request`, NEVER
+# `pull_request_target`. `--ignore-scripts`: an npm lifecycle script of a dependency must not execute on the runner.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: arc-k8s
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
