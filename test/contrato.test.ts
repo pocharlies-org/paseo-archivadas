@@ -4,8 +4,11 @@ import {
   archivadasList,
   archivadasRestore,
   MAX_COMPROBACIONES,
+  MAX_CONSULTA,
+  MAX_FRAGMENTO,
   MAX_ID,
   MAX_RUTA,
+  transcriptsBuscar,
   transcriptsCheck,
 } from "../shared/contract.ts";
 import { enTandas } from "../shared/sesiones.ts";
@@ -51,6 +54,27 @@ test("archivadas.transcripts: at most 500 sessions per call, with bounded string
   const resultado = { provider: "claude", sessionId: "s-1", existe: true };
   assert.equal(acepta(transcriptsCheck.output, { resultados: Array.from({ length: MAX_COMPROBACIONES }, () => resultado) }), true);
   assert.equal(acepta(transcriptsCheck.output, { resultados: Array.from({ length: MAX_COMPROBACIONES + 1 }, () => resultado) }), false, "an answer per session asked, no more");
+});
+
+test("archivadas.buscar-transcripts: a query of 2 to 500 characters, at most 500 sessions, strict, and a bounded answer", () => {
+  const busca = (query: string, n = 1) => ({ query, sesiones: Array.from({ length: n }, () => comprobacion) });
+  assert.equal(acepta(transcriptsBuscar.input, busca("ab")), true);
+  assert.equal(acepta(transcriptsBuscar.input, busca("x".repeat(MAX_CONSULTA))), true, "500 is the limit");
+  assert.equal(acepta(transcriptsBuscar.input, busca("x".repeat(MAX_CONSULTA + 1))), false, "501 is rejected");
+  assert.equal(acepta(transcriptsBuscar.input, busca("a")), false, "one character");
+  assert.equal(acepta(transcriptsBuscar.input, busca("  a   ")), false, "two characters only with the spaces");
+  assert.equal(acepta(transcriptsBuscar.input, busca("ab", MAX_COMPROBACIONES)), true);
+  assert.equal(acepta(transcriptsBuscar.input, busca("ab", MAX_COMPROBACIONES + 1)), false, "501 sessions");
+  assert.equal(acepta(transcriptsBuscar.input, { ...busca("ab"), de_mas: 1 }), false, "strict");
+  assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, sessionId: id(MAX_ID + 1) }] }), false, "sessionId");
+  assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, cwd: ruta(MAX_RUTA + 1) }] }), false, "cwd");
+  assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, de_mas: 1 }] }), false, "each session strict");
+  const resultado = { provider: "claude", sessionId: "s-1", buscable: true, coincidencias: 3, fragmento: "…algo…", parcial: false };
+  assert.equal(acepta(transcriptsBuscar.output, { resultados: Array.from({ length: MAX_COMPROBACIONES }, () => resultado) }), true);
+  assert.equal(acepta(transcriptsBuscar.output, { resultados: Array.from({ length: MAX_COMPROBACIONES + 1 }, () => resultado) }), false, "an answer per session asked");
+  assert.equal(acepta(transcriptsBuscar.output, { resultados: [{ ...resultado, fragmento: null }] }), true);
+  assert.equal(acepta(transcriptsBuscar.output, { resultados: [{ ...resultado, fragmento: "x".repeat(MAX_FRAGMENTO + 1) }] }), false, "fragment");
+  assert.equal(acepta(transcriptsBuscar.output, { resultados: [{ ...resultado, coincidencias: -1 }] }), false, "count");
 });
 
 test("enTandas: the lookups of a long list fit the bound, in order, with nothing lost", () => {

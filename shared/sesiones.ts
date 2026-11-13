@@ -1,4 +1,4 @@
-import type { Historial, Sesion } from "./contract.ts";
+import type { BusquedaOut, Historial, Sesion, TranscriptIn } from "./contract.ts";
 
 /** What the daemon's «Importar sesión» listing returns for a directory (the fields this plugin reads). */
 export interface Reciente {
@@ -264,16 +264,63 @@ export function enTandas<T>(lista: readonly T[], tamano: number): T[][] {
 /** A session can be brought back unless it is archived and its history is gone. */
 export const restaurable = (sesion: Sesion): boolean => !(sesion.archivada && sesion.historial === "no");
 
-const sinAcentos = (texto: string) => texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+/** Lowercase and without accents: what every search compares, here and in the transcripts on the server. */
+export const sinAcentos = (texto: string) => texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+/** The words of a query, normalised: a search matches when every one of them appears. */
+export const palabrasDe = (texto: string): string[] => sinAcentos(texto).split(/\s+/).filter(Boolean);
 
 /** Every word typed has to appear in the title, the prompts or the provider; «archivada» finds the archived ones. */
 export function buscar(sesiones: readonly Sesion[], texto: string): Sesion[] {
-  const palabras = sinAcentos(texto).split(/\s+/).filter(Boolean);
+  const palabras = palabrasDe(texto);
   if (palabras.length === 0) return [...sesiones];
   return sesiones.filter((sesion) => {
     const pajar = sinAcentos(`${sesion.titulo} ${sesion.resumen} ${sesion.providerLabel}${sesion.archivada ? " archivada" : ""}`);
     return palabras.every((palabra) => pajar.includes(palabra));
   });
+}
+
+/** The rows a transcript search asks about: every one with a session handle whose history is not known to be gone. */
+export function aBuscarEnTranscripts(sesiones: readonly Sesion[]): TranscriptIn[] {
+  return sesiones
+    .filter((s) => s.historial !== "no" && s.providerHandleId !== "")
+    .map((s) => ({ provider: s.providerId, sessionId: s.providerHandleId, cwd: s.cwd }));
+}
+
+export interface Coincidencia {
+  readonly coincidencias: number;
+  readonly fragmento: string | null;
+}
+
+export interface ResultadoTranscripts {
+  /** The rows with a hit, in the list's order. */
+  readonly filas: readonly Sesion[];
+  /** By row key: how many messages matched and the context of the first hit. */
+  readonly coincidencias: ReadonlyMap<string, Coincidencia>;
+  /** Rows of providers whose transcripts this plugin cannot read: hidden, and counted for the note. */
+  readonly noBuscables: number;
+  /** Some transcript was not read to the end: a row missing from the list may still match. */
+  readonly parcial: boolean;
+}
+
+/** Applies a transcript search's answers to the rows (by provider and session). */
+export function conTranscripts(sesiones: readonly Sesion[], resultados: readonly BusquedaOut[]): ResultadoTranscripts {
+  const porClave = new Map(resultados.map((r) => [claveDe(r.provider, r.sessionId), r]));
+  const filas: Sesion[] = [];
+  const coincidencias = new Map<string, Coincidencia>();
+  let noBuscables = 0;
+  for (const sesion of sesiones) {
+    const resultado = porClave.get(sesion.clave);
+    if (!resultado) continue;
+    if (!resultado.buscable) {
+      if (resultado.provider !== "claude") noBuscables++;
+      continue;
+    }
+    if (resultado.coincidencias <= 0) continue;
+    filas.push(sesion);
+    coincidencias.set(sesion.clave, { coincidencias: resultado.coincidencias, fragmento: resultado.fragmento });
+  }
+  return { filas, coincidencias, noBuscables, parcial: resultados.some((r) => r.parcial) };
 }
 
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"] as const;

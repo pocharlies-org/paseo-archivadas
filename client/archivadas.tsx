@@ -10,8 +10,30 @@ import { Icon, ScrollView, TextInput } from "@getpaseo/plugin/client/react-nativ
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, useWindowDimensions, View } from "react-native";
 import { conAlfa } from "../shared/color.ts";
-import { archivadasList, archivadasRestore, MAX_COMPROBACIONES, type Sesion, transcriptsCheck } from "../shared/contract.ts";
-import { buscar, conHistorial, enTandas, etiquetaArchivada, hace, porComprobar, restaurable, subtituloDe } from "../shared/sesiones.ts";
+import {
+  archivadasList,
+  archivadasRestore,
+  type BusquedaOut,
+  MAX_COMPROBACIONES,
+  MAX_CONSULTA,
+  MIN_CONSULTA,
+  type Sesion,
+  transcriptsBuscar,
+  transcriptsCheck,
+} from "../shared/contract.ts";
+import {
+  aBuscarEnTranscripts,
+  buscar,
+  type Coincidencia,
+  conHistorial,
+  conTranscripts,
+  enTandas,
+  etiquetaArchivada,
+  hace,
+  porComprobar,
+  restaurable,
+  subtituloDe,
+} from "../shared/sesiones.ts";
 import { type DatosWorkspace, destinoDe, vigilaWorkspaces } from "./workspaces.ts";
 
 type Tema = PluginHostProps["theme"];
@@ -22,13 +44,24 @@ const ID_PANTALLA_ABRIR = "abrir";
 const ID_PANEL = "archivadas";
 /** Rows drawn at once: a host with hundreds of sessions would otherwise draw them all every time the popover opens. */
 const FILAS_POR_TANDA = 60;
-/** The search text never leaves the client, but nothing useful is typed past this. */
-const MAX_BUSQUEDA = 500;
+/** Height of a one-line note under the list (11 px text plus the gap). */
+const ALTO_NOTA = 22;
+/** Pause in the typing after which a transcript search runs (Enter runs it at once): never one search per keystroke. */
+const ESPERA_BUSQUEDA_MS = 400;
 
 type Estado =
   | { readonly fase: "cargando" }
   | { readonly fase: "error"; readonly mensaje: string }
   | { readonly fase: "listo"; readonly sesiones: readonly Sesion[]; readonly avisos: readonly string[] };
+
+/** A search inside the transcripts, for the query it was run with. */
+type Busqueda =
+  | { readonly fase: "inactiva" }
+  | { readonly fase: "buscando"; readonly consulta: string }
+  | { readonly fase: "error"; readonly consulta: string; readonly mensaje: string }
+  | { readonly fase: "lista"; readonly consulta: string; readonly resultados: readonly BusquedaOut[] };
+
+const SIN_LISTA: readonly Sesion[] = [];
 
 const mensajeDe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -108,6 +141,11 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
   function ListaDeSesiones({ theme, layout, workspaceId, abre, alTerminar, enPanel }: ListaProps) {
     const [estado, setEstado] = useState<Estado>({ fase: "cargando" });
     const [texto, setTexto] = useState("");
+    const [enTranscripts, setEnTranscripts] = useState(false);
+    // The query a transcript search runs with: set after a pause in the typing or on Enter, so the search does not follow
+    // every keystroke. Null when not searching transcripts.
+    const [consulta, setConsulta] = useState<string | null>(null);
+    const [busqueda, setBusqueda] = useState<Busqueda>({ fase: "inactiva" });
     const [visibles, setVisibles] = useState(FILAS_POR_TANDA);
     const [intento, setIntento] = useState(0);
     const { height } = useWindowDimensions();
@@ -180,8 +218,55 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       [workspaceId, alTerminar, abre, enPanel],
     );
 
-    const todas = estado.fase === "listo" ? estado.sesiones : [];
-    const filtradas = useMemo(() => buscar(todas, texto), [todas, texto]);
+    const todas = estado.fase === "listo" ? estado.sesiones : SIN_LISTA;
+
+    useEffect(() => {
+      if (!enTranscripts) {
+        setConsulta(null);
+        return;
+      }
+      const espera = setTimeout(() => setConsulta(texto.trim()), ESPERA_BUSQUEDA_MS);
+      return () => clearTimeout(espera);
+    }, [texto, enTranscripts]);
+
+    // One search per query (and per list loaded): a newer query cancels this one's answer, which is then dropped.
+    useEffect(() => {
+      if (!enTranscripts || consulta === null || consulta.length < MIN_CONSULTA || estado.fase !== "listo") {
+        setBusqueda({ fase: "inactiva" });
+        return;
+      }
+      let cancelado = false;
+      setBusqueda({ fase: "buscando", consulta });
+      void (async () => {
+        try {
+          // The server takes a bounded number of sessions per call, and each call reads files for up to its time budget: the
+          // batches go one after the other, not all at once.
+          const resultados: BusquedaOut[] = [];
+          for (const tanda of enTandas(aBuscarEnTranscripts(estado.sesiones), MAX_COMPROBACIONES)) {
+            if (cancelado) return;
+            resultados.push(...(await client.rpc(transcriptsBuscar, { query: consulta, sesiones: tanda })).resultados);
+          }
+          if (!cancelado) setBusqueda({ fase: "lista", consulta, resultados });
+        } catch (error) {
+          if (!cancelado) setBusqueda({ fase: "error", consulta, mensaje: mensajeDe(error) });
+        }
+      })();
+      return () => {
+        cancelado = true;
+      };
+    }, [consulta, enTranscripts, estado]);
+
+    const enviaBusqueda = () => {
+      if (enTranscripts) setConsulta(texto.trim());
+    };
+    const cambiaModo = () => {
+      setEnTranscripts((activo) => !activo);
+      setVisibles(FILAS_POR_TANDA);
+    };
+
+    const transcripts = useMemo(() => (busqueda.fase === "lista" ? conTranscripts(todas, busqueda.resultados) : null), [busqueda, todas]);
+    const porTexto = useMemo(() => buscar(todas, texto), [todas, texto]);
+    const filtradas = enTranscripts ? (transcripts?.filas ?? SIN_LISTA) : porTexto;
     const archivadas = filtradas.filter((s) => s.archivada).length;
     const cuenta = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
     const resumenCuenta = [
@@ -191,9 +276,19 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       .filter(Boolean)
       .join(" · ");
 
+    // The notes under a transcript search take room the popover does not have: the list gives it up, so the popover keeps its height.
+    const notas = enTranscripts && transcripts ? Number(transcripts.noBuscables > 0) + Number(transcripts.parcial) : 0;
+
     return (
       <View style={enPanel ? { flex: 1, padding: 12, gap: 8 } : { width: layout.compact ? "100%" : 372, gap: 8 }}>
-        <Buscador theme={theme} texto={texto} onChange={(t) => (setTexto(t), setVisibles(FILAS_POR_TANDA))} />
+        <Buscador
+          theme={theme}
+          texto={texto}
+          onChange={(t) => (setTexto(t), setVisibles(FILAS_POR_TANDA))}
+          enTranscripts={enTranscripts}
+          onCambiaModo={cambiaModo}
+          onEnvia={enviaBusqueda}
+        />
         {estado.fase === "cargando" ? (
           <Aviso theme={theme} cargando>
             Cargando sesiones…
@@ -209,12 +304,35 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
               <Text style={{ color: colores.foreground, fontSize: 13 }}>Reintentar</Text>
             </Pressable>
           </View>
+        ) : enTranscripts && texto.trim().length < MIN_CONSULTA ? (
+          <Aviso theme={theme}>{`Escribe al menos ${MIN_CONSULTA} caracteres para buscar en los transcripts`}</Aviso>
+        ) : enTranscripts && (busqueda.fase === "buscando" || busqueda.fase === "inactiva") ? (
+          <Aviso theme={theme} cargando>
+            Buscando en transcripts…
+          </Aviso>
+        ) : enTranscripts && busqueda.fase === "error" ? (
+          <View style={{ gap: 8, paddingVertical: 8 }}>
+            <Text style={{ color: colores.statusDanger, fontSize: 13 }}>{busqueda.mensaje}</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setIntento((n) => n + 1)}
+              style={{ alignSelf: "flex-start", borderWidth: 1, borderColor: colores.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
+            >
+              <Text style={{ color: colores.foreground, fontSize: 13 }}>Reintentar</Text>
+            </Pressable>
+          </View>
         ) : filtradas.length === 0 ? (
-          <Aviso theme={theme}>{todas.length === 0 ? "No hay sesiones en este workspace" : `Nada coincide con «${texto.trim()}»`}</Aviso>
+          <Aviso theme={theme}>
+            {todas.length === 0
+              ? "No hay sesiones en este workspace"
+              : enTranscripts
+                ? `Ningún transcript contiene «${busqueda.fase === "lista" ? busqueda.consulta : texto.trim()}»`
+                : `Nada coincide con «${texto.trim()}»`}
+          </Aviso>
         ) : (
           <>
             <Text style={{ color: colores.foregroundMuted, fontSize: 11, paddingHorizontal: 2 }}>{resumenCuenta}</Text>
-            <ScrollView style={enPanel ? { flex: 1 } : { maxHeight: alto }} contentContainerStyle={{ gap: 4 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+            <ScrollView style={enPanel ? { flex: 1 } : { maxHeight: alto - notas * ALTO_NOTA }} contentContainerStyle={{ gap: 4 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
               {filtradas.slice(0, visibles).map((sesion) => (
                 <Fila
                   key={sesion.clave}
@@ -223,6 +341,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
                   restaurando={restaurando === sesion.clave}
                   bloqueada={restaurando !== null}
                   error={errores[sesion.clave] || null}
+                  coincidencia={enTranscripts ? (transcripts?.coincidencias.get(sesion.clave) ?? null) : null}
                   onPress={() => void restaura(sesion)}
                 />
               ))}
@@ -234,6 +353,16 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
             </ScrollView>
           </>
         )}
+        {enTranscripts && transcripts && transcripts.noBuscables > 0 ? (
+          <Text numberOfLines={1} style={{ color: colores.foregroundMuted, fontSize: 11 }}>
+            {`${cuenta(transcripts.noBuscables, "sesión", "sesiones")} de otros providers no se pueden buscar`}
+          </Text>
+        ) : null}
+        {enTranscripts && transcripts?.parcial ? (
+          <Text numberOfLines={1} style={{ color: colores.statusWarning, fontSize: 11 }}>
+            Búsqueda parcial: algunos transcripts no se leyeron enteros
+          </Text>
+        ) : null}
         {estado.fase === "listo" && estado.avisos.length > 0 ? (
           <Text numberOfLines={2} style={{ color: colores.statusWarning, fontSize: 11 }}>
             Lista incompleta: {estado.avisos.join("; ")}
@@ -262,7 +391,18 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
   };
 }
 
-function Buscador({ theme, texto, onChange }: { theme: Tema; texto: string; onChange(texto: string): void }) {
+interface BuscadorProps {
+  readonly theme: Tema;
+  readonly texto: string;
+  onChange(texto: string): void;
+  /** Searching inside the transcripts instead of the titles and prompts. */
+  readonly enTranscripts: boolean;
+  onCambiaModo(): void;
+  /** Enter: a transcript search runs at once instead of after the pause. */
+  onEnvia(): void;
+}
+
+function Buscador({ theme, texto, onChange, enTranscripts, onCambiaModo, onEnvia }: BuscadorProps) {
   const { colors } = theme;
   return (
     <View
@@ -281,12 +421,14 @@ function Buscador({ theme, texto, onChange }: { theme: Tema; texto: string; onCh
       <TextInput
         value={texto}
         onChangeText={onChange}
-        placeholder="Buscar…"
+        onSubmitEditing={onEnvia}
+        returnKeyType="search"
+        placeholder={enTranscripts ? "Buscar en transcripts…" : "Buscar…"}
         placeholderTextColor={colors.foregroundMuted}
         autoCapitalize="none"
         autoCorrect={false}
-        maxLength={MAX_BUSQUEDA}
-        accessibilityLabel="Buscar sesiones"
+        maxLength={MAX_CONSULTA}
+        accessibilityLabel={enTranscripts ? "Buscar en los transcripts" : "Buscar sesiones"}
         // The web focus ring is the host's to draw; a second one inside the popover reads as a glitch.
         style={[{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 13, paddingVertical: 8 }, { outlineStyle: "none" } as object]}
       />
@@ -295,6 +437,25 @@ function Buscador({ theme, texto, onChange }: { theme: Tema; texto: string; onCh
           <Icon name="X" size={14} color={colors.foregroundMuted} />
         </Pressable>
       ) : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Buscar dentro de los transcripts"
+        accessibilityState={{ selected: enTranscripts }}
+        hitSlop={6}
+        onPress={onCambiaModo}
+        style={(estado) => ({
+          marginRight: -6,
+          padding: 4,
+          borderRadius: 6,
+          backgroundColor: enTranscripts
+            ? (conAlfa(colors.accent, 0.16) ?? colors.surface2)
+            : estado.pressed || (estado as { hovered?: boolean }).hovered
+              ? colors.surface1
+              : "transparent",
+        })}
+      >
+        <Icon name="TextSearch" size={14} color={enTranscripts ? colors.accent : colors.foregroundMuted} />
+      </Pressable>
     </View>
   );
 }
@@ -315,10 +476,12 @@ interface FilaProps {
   /** Another row is being restored: this one waits. */
   readonly bloqueada: boolean;
   readonly error: string | null;
+  /** What a transcript search found in this session: drawn under the subtitle. */
+  readonly coincidencia?: Coincidencia | null;
   onPress(): void;
 }
 
-function Fila({ theme, sesion, restaurando, bloqueada, error, onPress }: FilaProps) {
+function Fila({ theme, sesion, restaurando, bloqueada, error, coincidencia, onPress }: FilaProps) {
   const { colors } = theme;
   const archivada = sesion.archivada !== null;
   const puede = restaurable(sesion);
@@ -365,6 +528,16 @@ function Fila({ theme, sesion, restaurando, bloqueada, error, onPress }: FilaPro
           {subtitulo ? (
             <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 11 }}>
               {subtitulo}
+            </Text>
+          ) : null}
+          {coincidencia?.fragmento ? (
+            <Text numberOfLines={2} style={{ color: colors.foregroundMuted, fontSize: 11, lineHeight: 15 }}>
+              {coincidencia.fragmento}
+            </Text>
+          ) : null}
+          {coincidencia ? (
+            <Text numberOfLines={1} style={{ color: colors.accent, fontSize: 11 }}>
+              {`${coincidencia.coincidencias} ${coincidencia.coincidencias === 1 ? "coincidencia" : "coincidencias"}`}
             </Text>
           ) : null}
         </View>

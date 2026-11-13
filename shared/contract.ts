@@ -10,6 +10,11 @@ import { z } from "zod";
 export const MAX_ID = 200;
 export const MAX_RUTA = 4096;
 export const MAX_COMPROBACIONES = 500;
+/** A transcript search: what is typed is bounded like the search box, and a query shorter than this matches almost everything. */
+export const MAX_CONSULTA = 500;
+export const MIN_CONSULTA = 2;
+/** The context the server returns around the first hit (~120 characters plus the ellipses): this bounds the answer. */
+export const MAX_FRAGMENTO = 300;
 
 const Id = z.string().max(MAX_ID);
 const Ruta = z.string().max(MAX_RUTA);
@@ -59,6 +64,34 @@ export const transcriptsCheck = defineRpc({
   input: z.object({ sesiones: z.array(TranscriptIn).max(MAX_COMPROBACIONES) }).strict(),
   // One answer per session asked, so no more than the question had.
   output: z.object({ resultados: z.array(TranscriptOut).max(MAX_COMPROBACIONES) }),
+});
+
+const Consulta = z
+  .string()
+  .max(MAX_CONSULTA)
+  .refine((texto) => texto.trim().length >= MIN_CONSULTA, { message: `at least ${MIN_CONSULTA} characters` });
+
+/**
+ * What a search found in one session's transcript. `buscable` is false when the provider keeps its history where this plugin
+ * cannot read it (or the transcript is gone); `coincidencias` counts the messages with a hit; `parcial` says the transcript was
+ * not read to the end (size or time limit), so a zero there proves nothing.
+ */
+const BusquedaOut = z.object({
+  provider: z.string(),
+  sessionId: z.string(),
+  buscable: z.boolean(),
+  coincidencias: z.number().int().nonnegative(),
+  fragmento: z.string().max(MAX_FRAGMENTO).nullable(),
+  parcial: z.boolean(),
+});
+export type BusquedaOut = z.infer<typeof BusquedaOut>;
+
+/** RPC names are lowercase (`[a-z][a-z0-9._-]*`). Searches the text of the user and assistant messages of each session's transcript (never tool input or output). */
+export const transcriptsBuscar = defineRpc({
+  name: "archivadas.buscar-transcripts",
+  input: z.object({ query: Consulta, sesiones: z.array(TranscriptIn).max(MAX_COMPROBACIONES) }).strict(),
+  // One answer per session asked, so no more than the question had.
+  output: z.object({ resultados: z.array(BusquedaOut).max(MAX_COMPROBACIONES) }),
 });
 
 /** Brings a session back into a workspace (the daemon unarchives its agent when it has one) and returns the agent to open. */

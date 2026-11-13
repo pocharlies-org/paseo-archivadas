@@ -11,6 +11,27 @@ Tap a row and the session comes back into *this* workspace and opens. An archive
 id, labels and history); a session never imported becomes a new agent. A search box filters by title and prompts, and
 «archivada» finds the archived ones. Paseo's native «Importar sesión» button is untouched.
 
+### Search inside the transcripts
+
+The button at the right of the search box (a magnifier over lines, «Buscar dentro de los transcripts») switches the search
+from the titles and prompts to the **contents of the Claude transcripts**. It turns the accent colour while on, and the box
+says «Buscar en transcripts…». Off, the search is exactly the one above.
+
+- The search runs when you press Enter or stop typing for ~400 ms, never on each keystroke; a newer query drops the answer
+  of an older one. It needs at least 2 characters.
+- What is searched: the text of the **user and assistant messages** only (a string message, or the `text` blocks of one).
+  Tool calls, tool output, thinking, images and the meta entries Claude Code injects are not. Case and accents are ignored,
+  and every word typed has to appear somewhere in the session, as in the normal search.
+- The list keeps only the sessions with a hit. Each row shows a fragment of the first hit (~120 characters around the first
+  word) and «N coincidencias», the number of messages where any of the words appears.
+- Only Claude keeps its transcripts where this plugin can read them: rows of other providers are hidden and counted in
+  «N sesiones de otros providers no se pueden buscar». Archived rows «sin historial» are not searched.
+
+Limits, on the daemon host: each transcript is streamed line by line, up to **64 MB** per file (a single line over 16 MB,
+an inline image or a huge tool output, is skipped); **4** files are read at a time; one search stops after **8 s**. A
+transcript cut by a limit is reported as «Búsqueda parcial: algunos transcripts no se leyeron enteros»: a session missing
+from the list may still match. The workspace's sessions go to the server in batches of 500. Nothing read is logged.
+
 An archived agent whose Claude transcript is no longer on disk (or that never had a provider session) is drawn dimmed with
 «sin historial» and cannot be tapped: the daemon cannot resume it.
 
@@ -45,6 +66,9 @@ the daemon it runs in.
 - Transcripts are looked up on the daemon host in `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-cwd>/<sessionId>.jsonl`,
   then in every project folder. `CLAUDE_CONFIG_DIR` is the one of the Claude provider's `env` in the Paseo `config.json`
   (`agents.providers.claude.env`, what the daemon starts Claude with), else the plugin process's own, else `~/.claude`. Other providers keep their history elsewhere: they are treated as restorable.
+- The transcript search (`archivadas.buscar-transcripts`) finds each file the same way, then reads it as a stream and parses
+  only the lines that can hold message text (a raw-byte test skips the rest, and the user entries that only return tool
+  output, without decoding them).
 - Restoring runs `importAgent({providerId, providerHandleId, cwd, workspaceId})`. The daemon does it atomically (an archived
   agent whose provider cannot resume it is archived again). The row shows the error inline if it fails.
 

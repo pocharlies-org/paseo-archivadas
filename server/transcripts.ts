@@ -72,35 +72,41 @@ export const codificaCwd = (cwd: string): string => cwd.replace(/[^A-Za-z0-9]/g,
 const ID_VALIDO = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /**
- * Whether the Claude transcript `<sessionId>.jsonl` is still on this host: first in the folder of its directory, then in
- * any project folder (the directory may have been renamed or reached through a symlink). Other providers keep their
+ * Finds the Claude transcript `<sessionId>.jsonl` on this host: first in the folder of its directory, then in any project
+ * folder (the directory may have been renamed or reached through a symlink). The project folders are listed once per
+ * locator, however many sessions it is asked for (also concurrently). Null when it is not there, and for a session id that
+ * could climb out of the projects folder.
+ */
+export function localizaTranscripts(disco: DiscoTranscripts): (sessionId: string, cwd: string) => Promise<string | null> {
+  const proyectos = carpetaProyectos(disco);
+  let carpetas: Promise<string[]> | null = null;
+  return async (sessionId, cwd) => {
+    if (!ID_VALIDO.test(sessionId)) return null;
+    const fichero = `${sessionId}.jsonl`;
+    const propia = join(proyectos, codificaCwd(cwd), fichero);
+    if (await disco.existe(propia)) return propia;
+    carpetas ??= disco.lista(proyectos);
+    for (const carpeta of await carpetas) {
+      const ruta = join(proyectos, carpeta, fichero);
+      if (await disco.existe(ruta)) return ruta;
+    }
+    return null;
+  };
+}
+
+/**
+ * Whether the Claude transcript of each session is still on this host (see `localizaTranscripts`). Other providers keep their
  * history in places this plugin does not read, so they answer null: the caller treats null as restorable.
  */
 export async function comprobarTranscripts(disco: DiscoTranscripts, sesiones: readonly TranscriptIn[]): Promise<TranscriptOut[]> {
-  const proyectos = carpetaProyectos(disco);
-  let carpetas: string[] | null = null;
+  const localiza = localizaTranscripts(disco);
   const resultados: TranscriptOut[] = [];
   for (const { provider, sessionId, cwd } of sesiones) {
     if (provider !== "claude") {
       resultados.push({ provider, sessionId, existe: null });
       continue;
     }
-    if (!ID_VALIDO.test(sessionId)) {
-      resultados.push({ provider, sessionId, existe: false });
-      continue;
-    }
-    const fichero = `${sessionId}.jsonl`;
-    let existe = await disco.existe(join(proyectos, codificaCwd(cwd), fichero));
-    if (!existe) {
-      carpetas ??= await disco.lista(proyectos);
-      for (const carpeta of carpetas) {
-        if (await disco.existe(join(proyectos, carpeta, fichero))) {
-          existe = true;
-          break;
-        }
-      }
-    }
-    resultados.push({ provider, sessionId, existe });
+    resultados.push({ provider, sessionId, existe: (await localiza(sessionId, cwd)) !== null });
   }
   return resultados;
 }

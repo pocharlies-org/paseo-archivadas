@@ -1,6 +1,7 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { archivadasList, archivadasRestore, transcriptsCheck } from "./shared/contract.ts";
+import { archivadasList, archivadasRestore, transcriptsBuscar, transcriptsCheck } from "./shared/contract.ts";
 import { listaSesiones, restauraSesion } from "./server/archivadas.ts";
+import { buscarEnTranscripts, discoBusquedaReal } from "./server/busqueda.ts";
 import { abreDaemonReal } from "./server/daemon.ts";
 import { comprobarTranscripts, discoReal } from "./server/transcripts.ts";
 
@@ -12,6 +13,7 @@ export default function contribute(server: PluginServerContext) {
   const abre = abreDaemonReal((nombre) => require(nombre));
   server.handle(archivadasList, (entrada) => listaSesiones(abre, entrada));
   server.handle(transcriptsCheck, async ({ sesiones }) => ({ resultados: await comprobarTranscripts(discoReal, sesiones) }));
+  server.handle(transcriptsBuscar, async ({ query, sesiones }) => ({ resultados: await buscarEnTranscripts(discoBusquedaReal, query, sesiones) }));
   server.handle(archivadasRestore, (entrada) => restauraSesion(abre, entrada));
   return () => {};
 }

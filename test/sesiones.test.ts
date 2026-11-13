@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Sesion } from "../shared/contract.ts";
 import {
+  aBuscarEnTranscripts,
   type AgenteHistorial,
   buscar,
   claveDe,
   clavesDe,
   conHistorial,
+  conTranscripts,
   desenvuelve,
   esDelWorkspace,
   etiquetaArchivada,
@@ -16,6 +18,7 @@ import {
   handleDe,
   handlesDe,
   ordenar,
+  palabrasDe,
   porComprobar,
   proveedorDe,
   type Reciente,
@@ -258,6 +261,40 @@ test("conHistorial and porComprobar: only archived rows are checked, and the ans
   assert.equal(estado("s-c"), "desconocido");
   assert.equal(estado("vivo"), "si", "rows the lookup did not answer keep their state");
   assert.deepEqual(porComprobar(resueltas.filter((f) => f.providerHandleId !== "s-c")), [], "nothing is left to check once answered");
+});
+
+test("palabrasDe: the words of a query, lowercase and without accents (the server matches transcripts with them)", () => {
+  assert.deepEqual(palabrasDe("  Migración   del CLÚSTER "), ["migracion", "del", "cluster"]);
+  assert.deepEqual(palabrasDe("   "), []);
+});
+
+test("aBuscarEnTranscripts and conTranscripts: rows without history are not asked; only hits are shown; other providers are counted", () => {
+  const filas = conHistorial(
+    fusionar({
+      recientes: [reciente("con"), reciente("sin"), reciente("cod", { providerId: "codex", providerLabel: "Codex" })],
+      agentes: [agente({ id: "a" }), agente({ id: "muerta" })],
+      destino,
+      canon,
+    }),
+    [
+      { provider: "claude", sessionId: "s-a", existe: true },
+      { provider: "claude", sessionId: "s-muerta", existe: false },
+    ],
+  );
+  const pedidas = aBuscarEnTranscripts(filas);
+  assert.deepEqual(pedidas.map((p) => p.sessionId).sort(), ["cod", "con", "s-a", "sin"], "the archived row without history is not sent");
+  const resultado = conTranscripts(filas, [
+    { provider: "claude", sessionId: "con", buscable: true, coincidencias: 3, fragmento: "…aguja…", parcial: false },
+    { provider: "claude", sessionId: "sin", buscable: true, coincidencias: 0, fragmento: null, parcial: true },
+    { provider: "codex", sessionId: "cod", buscable: false, coincidencias: 0, fragmento: null, parcial: false },
+    { provider: "claude", sessionId: "s-a", buscable: true, coincidencias: 1, fragmento: null, parcial: false },
+  ]);
+  assert.deepEqual(resultado.filas.map((f) => f.providerHandleId).sort(), ["con", "s-a"]);
+  assert.deepEqual(resultado.coincidencias.get(claveDe("claude", "con")), { coincidencias: 3, fragmento: "…aguja…" });
+  assert.equal(resultado.noBuscables, 1);
+  assert.equal(resultado.parcial, true);
+  const nada = conTranscripts(filas, []);
+  assert.deepEqual([nada.filas.length, nada.noBuscables, nada.parcial], [0, 0, false]);
 });
 
 test("restaurable: archived without history is the only dead end", () => {
