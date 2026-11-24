@@ -1,7 +1,7 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { archivadasList, archivadasRestore, transcriptsBuscar, transcriptsCheck } from "./shared/contract.ts";
 import { listaSesiones, restauraSesion } from "./server/archivadas.ts";
-import { buscarEnTranscripts, discoBusquedaReal } from "./server/busqueda.ts";
+import { buscarEnTranscripts, discoBusquedaReal, LIMITES, LIMITES_COMPLETO } from "./server/busqueda.ts";
 import { abreDaemonReal } from "./server/daemon.ts";
 import { comprobarTranscripts, discoReal } from "./server/transcripts.ts";
 
@@ -11,9 +11,11 @@ declare const require: (nombre: string) => unknown;
 // Paseo refuses a contribution that returns no cleanup; every daemon connection is opened and closed inside its request.
 export default function contribute(server: PluginServerContext) {
   const abre = abreDaemonReal((nombre) => require(nombre));
-  server.handle(archivadasList, (entrada) => listaSesiones(abre, entrada));
+  server.handle(archivadasList, ({ workspaces }) => listaSesiones(abre, workspaces));
   server.handle(transcriptsCheck, async ({ sesiones }) => ({ resultados: await comprobarTranscripts(discoReal, sesiones) }));
-  server.handle(transcriptsBuscar, async ({ query, sesiones }) => ({ resultados: await buscarEnTranscripts(discoBusquedaReal, query, sesiones) }));
+  server.handle(transcriptsBuscar, async ({ query, sesiones, completo }) => ({
+    resultados: await buscarEnTranscripts(discoBusquedaReal, query, sesiones, completo ? LIMITES_COMPLETO : LIMITES),
+  }));
   server.handle(archivadasRestore, (entrada) => restauraSesion(abre, entrada));
   return () => {};
 }

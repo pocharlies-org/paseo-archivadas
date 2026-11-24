@@ -8,6 +8,7 @@ import {
   MAX_FRAGMENTO,
   MAX_ID,
   MAX_RUTA,
+  MAX_WORKSPACES,
   transcriptsBuscar,
   transcriptsCheck,
 } from "../shared/contract.ts";
@@ -17,18 +18,21 @@ const acepta = (esquema: { safeParse(valor: unknown): { success: boolean } }, va
 const id = (largo: number) => "i".repeat(largo);
 const ruta = (largo: number) => `/${"c".repeat(largo - 1)}`;
 
-const lista = { workspaceId: "wks_a", cwd: "/work/proyecto", projectKey: "prj_1" };
+const ws = { workspaceId: "wks_a", cwd: "/work/proyecto", projectKey: "prj_1" };
 const restaura = { providerId: "claude", providerHandleId: "s-1", cwd: "/work/proyecto", workspaceId: "wks_a" };
 const comprobacion = { provider: "claude", sessionId: "s-1", cwd: "/work/proyecto" };
 
-test("archivadas.list: ids up to 200 and a path up to 4096 are taken, one more is not", () => {
-  assert.equal(acepta(archivadasList.input, lista), true);
-  assert.equal(acepta(archivadasList.input, { ...lista, projectKey: null }), true, "a workspace with no project");
-  assert.equal(acepta(archivadasList.input, { workspaceId: id(MAX_ID), cwd: ruta(MAX_RUTA), projectKey: id(MAX_ID) }), true, "at the limits");
-  assert.equal(acepta(archivadasList.input, { ...lista, workspaceId: id(MAX_ID + 1) }), false, "workspaceId");
-  assert.equal(acepta(archivadasList.input, { ...lista, projectKey: id(MAX_ID + 1) }), false, "projectKey");
-  assert.equal(acepta(archivadasList.input, { ...lista, cwd: ruta(MAX_RUTA + 1) }), false, "cwd");
-  assert.equal(acepta(archivadasList.input, { ...lista, de_mas: 1 }), false, "still strict");
+test("archivadas.list: up to 200 workspaces, ids up to 200 and a path up to 4096 are taken, one more is not", () => {
+  const lista = (workspaces: unknown[]) => ({ workspaces });
+  assert.equal(acepta(archivadasList.input, lista([ws])), true);
+  assert.equal(acepta(archivadasList.input, lista([{ ...ws, projectKey: null }])), true, "a workspace with no project");
+  assert.equal(acepta(archivadasList.input, lista(Array.from({ length: MAX_WORKSPACES }, () => ws))), true, "200 is the limit");
+  assert.equal(acepta(archivadasList.input, lista(Array.from({ length: MAX_WORKSPACES + 1 }, () => ws))), false, "201 is rejected");
+  assert.equal(acepta(archivadasList.input, lista([{ workspaceId: id(MAX_ID), cwd: ruta(MAX_RUTA), projectKey: id(MAX_ID) }])), true, "at the limits");
+  assert.equal(acepta(archivadasList.input, lista([{ ...ws, workspaceId: id(MAX_ID + 1) }])), false, "workspaceId");
+  assert.equal(acepta(archivadasList.input, lista([{ ...ws, projectKey: id(MAX_ID + 1) }])), false, "projectKey");
+  assert.equal(acepta(archivadasList.input, lista([{ ...ws, cwd: ruta(MAX_RUTA + 1) }])), false, "cwd");
+  assert.equal(acepta(archivadasList.input, lista([{ ...ws, de_mas: 1 }])), false, "still strict");
 });
 
 test("archivadas.restaurar: ids up to 200 and a path up to 4096 are taken, one more is not", () => {
@@ -57,7 +61,7 @@ test("archivadas.transcripts: at most 500 sessions per call, with bounded string
 });
 
 test("archivadas.buscar-transcripts: a query of 2 to 500 characters, at most 500 sessions, strict, and a bounded answer", () => {
-  const busca = (query: string, n = 1) => ({ query, sesiones: Array.from({ length: n }, () => comprobacion) });
+  const busca = (query: string, n = 1) => ({ query, sesiones: Array.from({ length: n }, () => comprobacion), completo: false });
   assert.equal(acepta(transcriptsBuscar.input, busca("ab")), true);
   assert.equal(acepta(transcriptsBuscar.input, busca("x".repeat(MAX_CONSULTA))), true, "500 is the limit");
   assert.equal(acepta(transcriptsBuscar.input, busca("x".repeat(MAX_CONSULTA + 1))), false, "501 is rejected");
@@ -66,6 +70,8 @@ test("archivadas.buscar-transcripts: a query of 2 to 500 characters, at most 500
   assert.equal(acepta(transcriptsBuscar.input, busca("ab", MAX_COMPROBACIONES)), true);
   assert.equal(acepta(transcriptsBuscar.input, busca("ab", MAX_COMPROBACIONES + 1)), false, "501 sessions");
   assert.equal(acepta(transcriptsBuscar.input, { ...busca("ab"), de_mas: 1 }), false, "strict");
+  assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [comprobacion] }), false, "completo is required");
+  assert.equal(acepta(transcriptsBuscar.input, { ...busca("ab"), completo: true }), true, "transcript entero");
   assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, sessionId: id(MAX_ID + 1) }] }), false, "sessionId");
   assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, cwd: ruta(MAX_RUTA + 1) }] }), false, "cwd");
   assert.equal(acepta(transcriptsBuscar.input, { query: "ab", sesiones: [{ ...comprobacion, de_mas: 1 }] }), false, "each session strict");

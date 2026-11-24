@@ -30,6 +30,12 @@ export interface Limites {
 
 export const LIMITES: Limites = { maxBytes: 64 * 1024 * 1024, maxLinea: 16 * 1024 * 1024, concurrencia: 4, presupuestoMs: 8_000 };
 
+/**
+ * «Transcript entero» (SC-6418): no byte cap and a wider budget per batch, so the whole file is walked. shortcut: the time
+ * budget still cuts a runaway read (it reports `parcial`); if a full sweep ever needs more, raise presupuestoMs here.
+ */
+export const LIMITES_COMPLETO: Limites = { maxBytes: Number.MAX_SAFE_INTEGER, maxLinea: 16 * 1024 * 1024, concurrencia: 4, presupuestoMs: 60_000 };
+
 /** Characters of context the fragment shows around the first hit, before the ellipses. */
 const LARGO_FRAGMENTO = 120;
 const ANTES_DEL_HIT = 40;
