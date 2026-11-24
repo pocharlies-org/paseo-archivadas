@@ -170,14 +170,16 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       void (async () => {
         try {
           // A panel restored with the page can mount before the workspace subscription has answered: ask the host then.
-          const entradas = [...datos.entries()].map(([id, d]) => [id, d as DatosWorkspace | null] as const);
-          const workspaces = entradas.length > 0 ? entradas : ([[workspaceId, await resuelveWorkspace(workspaceId)]] as const);
-          if (workspaces.every(([, d]) => d === null)) throw new Error("Este workspace ya no existe");
+          const validos: (readonly [string, DatosWorkspace])[] = [...datos.entries()];
+          if (validos.length === 0) {
+            const destino = await resuelveWorkspace(workspaceId);
+            if (!destino) throw new Error("Este workspace ya no existe");
+            validos.push([workspaceId, destino]);
+          }
           // shortcut: one call covers at most MAX_WORKSPACES workspaces; past that the list is partial and says so.
-          const validos = workspaces.filter(([, d]) => d !== null) as readonly (readonly [string, DatosWorkspace])[];
           const cortados = validos.length > MAX_WORKSPACES;
           const { sesiones, avisos: avisosServidor } = await client.rpc(archivadasList, {
-            workspaces: validos.slice(0, MAX_WORKSPACES).map(([id, d]) => ({ workspaceId: id, cwd: d.cwd, projectKey: d.projectKey })),
+            workspaces: validos.slice(0, MAX_WORKSPACES).map(([id, d]) => ({ workspaceId: id, cwd: d.cwd })),
           });
           const avisos = cortados ? [...avisosServidor, `más de ${MAX_WORKSPACES} workspaces: solo se lista una parte`] : avisosServidor;
           // The list is shown once it knows which archived rows still have their history: no row flips from yellow to dim.

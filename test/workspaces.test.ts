@@ -8,7 +8,7 @@ type Observador = {
   update(mensaje: { type: string; payload: { kind: "upsert"; workspace: Descriptor } | { kind: "remove"; id: string } }): void;
 };
 
-const w = (id: string, extra: Partial<Descriptor> = {}): Descriptor => ({ id, projectId: "prj_1", projectRootPath: `/root/${id}`, ...extra });
+const w = (id: string, extra: Partial<Descriptor> = {}): Descriptor => ({ id, projectRootPath: `/root/${id}`, ...extra });
 const ids = (cantidad: number, desde = 0) => Array.from({ length: cantidad }, (_, n) => w(`w${desde + n}`));
 const tick = () => new Promise<void>((resolver) => setTimeout(resolver, 0));
 
@@ -83,11 +83,10 @@ function botonesFalsos(datos: Map<string, DatosWorkspace>) {
   return { botones, registro, sincroniza };
 }
 
-test("destinoDe: the workspace directory, else the project root; the project key is null without a project", () => {
-  assert.deepEqual(destinoDe(w("a")), { cwd: "/root/a", projectKey: "prj_1", nombre: "" });
-  assert.deepEqual(destinoDe(w("a", { workspaceDirectory: "/work/a" })), { cwd: "/work/a", projectKey: "prj_1", nombre: "" });
-  assert.deepEqual(destinoDe(w("a", { name: "Alfa" })), { cwd: "/root/a", projectKey: "prj_1", nombre: "Alfa" }, "the name rides along for the workspace filter");
-  assert.deepEqual(destinoDe(w("a", { projectId: "" })), { cwd: "/root/a", projectKey: null, nombre: "" });
+test("destinoDe: the workspace directory, else the project root; the name rides along", () => {
+  assert.deepEqual(destinoDe(w("a")), { cwd: "/root/a", nombre: "" });
+  assert.deepEqual(destinoDe(w("a", { workspaceDirectory: "/work/a" })), { cwd: "/work/a", nombre: "" });
+  assert.deepEqual(destinoDe(w("a", { name: "Alfa" })), { cwd: "/root/a", nombre: "Alfa" }, "the name rides along for the workspace filter");
 });
 
 test("the first snapshot of a host with several pages lists the first page at once and the rest when it has them", async () => {
@@ -164,7 +163,7 @@ test("a snapshot swaps the list: workspaces that are gone leave, new ones arrive
   await tick();
   assert.deepEqual([...datos.keys()].sort(), ["a", "d", "e"]);
   assert.deepEqual([...botones].sort(), ["a", "d", "e"]);
-  assert.deepEqual(datos.get("e"), { cwd: "/work/e", projectKey: "prj_1", nombre: "" });
+  assert.deepEqual(datos.get("e"), { cwd: "/work/e", nombre: "" });
   assert.equal(registro.quitados, 2, "b and c left");
 });
 

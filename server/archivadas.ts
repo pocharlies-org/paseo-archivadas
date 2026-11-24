@@ -37,7 +37,6 @@ async function todoElHistorial(daemon: Daemon): Promise<AgenteHistorial[]> {
 export interface ListaIn {
   readonly workspaceId: string;
   readonly cwd: string;
-  readonly projectKey: string | null;
 }
 
 export interface ListaOut {

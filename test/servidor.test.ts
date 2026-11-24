@@ -49,10 +49,10 @@ const archivado = (id: string, extra: Record<string, unknown> = {}) => ({
   },
 });
 
-const entrada = { workspaceId: "wks_a", cwd: "/work/proyecto", projectKey: "prj_1" };
+const entrada = { workspaceId: "wks_a", cwd: "/work/proyecto" };
 const canon = (ruta: string) => ruta;
 
-test("listaSesiones asks for what the native sheet asks (200 sessions of the directory) and the whole archived history of the project", async () => {
+test("listaSesiones asks for what the native sheet asks (200 sessions of the directory) and the whole archived history", async () => {
   const { daemon, llamadas } = daemonFalso({
     recientes: {
       entries: [
@@ -84,7 +84,7 @@ test("listaSesiones asks for what the native sheet asks (200 sessions of the dir
   assert.equal(llamadas.cerrado, 1, "the connection is closed after the read");
 });
 
-test("listaSesiones follows the history cursor to the end and does not narrow by project when the workspace has none", async () => {
+test("listaSesiones follows the history cursor to the end and never narrows it by project", async () => {
   const { daemon, llamadas } = daemonFalso({
     paginas: [
       { entries: [archivado("a1")], pageInfo: { hasMore: true, nextCursor: "c1" } },
@@ -92,7 +92,7 @@ test("listaSesiones follows the history cursor to the end and does not narrow by
       { entries: [archivado("a3")], pageInfo: { hasMore: false, nextCursor: null } },
     ],
   });
-  const { sesiones } = await listaSesiones(async () => daemon, [{ ...entrada, projectKey: null }], canon);
+  const { sesiones } = await listaSesiones(async () => daemon, [entrada], canon);
   assert.equal(sesiones.length, 3);
   assert.equal(llamadas.historial.length, 3);
   assert.equal((llamadas.historial[0] as { page: { cursor?: string } }).page.cursor, undefined);
@@ -124,7 +124,7 @@ test("listaSesiones lee el historial una vez para todos los workspaces y los rec
   });
   const { sesiones } = await listaSesiones(
     async () => daemon,
-    [entrada, { workspaceId: "wks_b", cwd: "/otro/sitio", projectKey: null }, { workspaceId: "wks_c", cwd: "/work/proyecto", projectKey: null }],
+    [entrada, { workspaceId: "wks_b", cwd: "/otro/sitio" }, { workspaceId: "wks_c", cwd: "/work/proyecto" }],
     canon,
   );
   assert.equal(llamadas.historial.length, 1, "one history read for all workspaces");

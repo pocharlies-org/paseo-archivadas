@@ -4,7 +4,7 @@ import { z } from "zod";
 /**
  * Bounds of what the plugin's server accepts: it parses what comes over the RPC before it touches the disk or the daemon, so a
  * client that is not this plugin's own cannot make it walk an unbounded list or hold an unbounded string. Paths are PATH_MAX;
- * ids (workspace, project, provider, session handle) are far shorter than 200 in every provider. A lookup takes at most
+ * ids (workspace, provider, session handle) are far shorter than 200 in every provider. A lookup takes at most
  * `MAX_COMPROBACIONES` sessions: the client sends a longer list in batches (`enTandas`).
  */
 export const MAX_ID = 200;
@@ -49,7 +49,7 @@ export const SesionSchema = z.object({
 });
 export type Sesion = z.infer<typeof SesionSchema>;
 
-const WorkspaceIn = z.object({ workspaceId: Id, cwd: Ruta, projectKey: Id.nullable() }).strict();
+const WorkspaceIn = z.object({ workspaceId: Id, cwd: Ruta }).strict();
 
 /** The importable sessions and archived agents of every workspace asked, merged per workspace, newest first. */
 export const archivadasList = defineRpc({

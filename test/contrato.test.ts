@@ -18,19 +18,17 @@ const acepta = (esquema: { safeParse(valor: unknown): { success: boolean } }, va
 const id = (largo: number) => "i".repeat(largo);
 const ruta = (largo: number) => `/${"c".repeat(largo - 1)}`;
 
-const ws = { workspaceId: "wks_a", cwd: "/work/proyecto", projectKey: "prj_1" };
+const ws = { workspaceId: "wks_a", cwd: "/work/proyecto" };
 const restaura = { providerId: "claude", providerHandleId: "s-1", cwd: "/work/proyecto", workspaceId: "wks_a" };
 const comprobacion = { provider: "claude", sessionId: "s-1", cwd: "/work/proyecto" };
 
 test("archivadas.list: up to 200 workspaces, ids up to 200 and a path up to 4096 are taken, one more is not", () => {
   const lista = (workspaces: unknown[]) => ({ workspaces });
   assert.equal(acepta(archivadasList.input, lista([ws])), true);
-  assert.equal(acepta(archivadasList.input, lista([{ ...ws, projectKey: null }])), true, "a workspace with no project");
   assert.equal(acepta(archivadasList.input, lista(Array.from({ length: MAX_WORKSPACES }, () => ws))), true, "200 is the limit");
   assert.equal(acepta(archivadasList.input, lista(Array.from({ length: MAX_WORKSPACES + 1 }, () => ws))), false, "201 is rejected");
-  assert.equal(acepta(archivadasList.input, lista([{ workspaceId: id(MAX_ID), cwd: ruta(MAX_RUTA), projectKey: id(MAX_ID) }])), true, "at the limits");
+  assert.equal(acepta(archivadasList.input, lista([{ workspaceId: id(MAX_ID), cwd: ruta(MAX_RUTA) }])), true, "at the limits");
   assert.equal(acepta(archivadasList.input, lista([{ ...ws, workspaceId: id(MAX_ID + 1) }])), false, "workspaceId");
-  assert.equal(acepta(archivadasList.input, lista([{ ...ws, projectKey: id(MAX_ID + 1) }])), false, "projectKey");
   assert.equal(acepta(archivadasList.input, lista([{ ...ws, cwd: ruta(MAX_RUTA + 1) }])), false, "cwd");
   assert.equal(acepta(archivadasList.input, lista([{ ...ws, de_mas: 1 }])), false, "still strict");
 });
