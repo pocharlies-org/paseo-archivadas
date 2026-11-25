@@ -83,10 +83,15 @@ function botonesFalsos(datos: Map<string, DatosWorkspace>) {
   return { botones, registro, sincroniza };
 }
 
-test("destinoDe: the workspace directory, else the project root; the name rides along", () => {
-  assert.deepEqual(destinoDe(w("a")), { cwd: "/root/a", nombre: "" });
-  assert.deepEqual(destinoDe(w("a", { workspaceDirectory: "/work/a" })), { cwd: "/work/a", nombre: "" });
-  assert.deepEqual(destinoDe(w("a", { name: "Alfa" })), { cwd: "/root/a", nombre: "Alfa" }, "the name rides along for the workspace filter");
+test("destinoDe: the workspace directory, else the project root; name and project ride along", () => {
+  const sin = { nombre: "", proyectoId: null, proyecto: "" };
+  assert.deepEqual(destinoDe(w("a")), { cwd: "/root/a", ...sin });
+  assert.deepEqual(destinoDe(w("a", { workspaceDirectory: "/work/a" })), { cwd: "/work/a", ...sin });
+  assert.deepEqual(
+    destinoDe(w("a", { name: "Alfa", projectId: "p1", projectDisplayName: "Proyecto" })),
+    { cwd: "/root/a", nombre: "Alfa", proyectoId: "p1", proyecto: "Proyecto" },
+    "name and project ride along for the selectors",
+  );
 });
 
 test("the first snapshot of a host with several pages lists the first page at once and the rest when it has them", async () => {
@@ -163,7 +168,7 @@ test("a snapshot swaps the list: workspaces that are gone leave, new ones arrive
   await tick();
   assert.deepEqual([...datos.keys()].sort(), ["a", "d", "e"]);
   assert.deepEqual([...botones].sort(), ["a", "d", "e"]);
-  assert.deepEqual(datos.get("e"), { cwd: "/work/e", nombre: "" });
+  assert.deepEqual(datos.get("e"), { cwd: "/work/e", nombre: "", proyectoId: null, proyecto: "" });
   assert.equal(registro.quitados, 2, "b and c left");
 });
 

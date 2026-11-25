@@ -1,9 +1,11 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
-/** What the list needs of a workspace: where its sessions live and its name (the workspace filter matches on it). */
+/** What the list needs of a workspace: where its sessions live, and its name and project for the selectors. */
 export interface DatosWorkspace {
   readonly cwd: string;
   readonly nombre: string;
+  readonly proyectoId: string | null;
+  readonly proyecto: string;
 }
 
 /** The part of a workspace descriptor the list needs. */
@@ -12,11 +14,15 @@ export interface Descriptor {
   readonly projectRootPath: string;
   readonly workspaceDirectory?: string;
   readonly name?: string;
+  readonly projectId?: string;
+  readonly projectDisplayName?: string;
   readonly archivingAt?: string | null;
 }
 export const destinoDe = (w: Descriptor): DatosWorkspace => ({
   cwd: w.workspaceDirectory ?? w.projectRootPath,
   nombre: w.name ?? "",
+  proyectoId: w.projectId ?? null,
+  proyecto: w.projectDisplayName ?? "",
 });
 
 type Paginacion = { readonly hasMore: boolean; readonly nextCursor: string | null };

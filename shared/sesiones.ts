@@ -74,6 +74,20 @@ const msDe = (iso: string | null | undefined): number => {
   return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 };
 
+/**
+ * Each session once. A directory under several workspaces lists the same sessions for each of them, and an archived agent
+ * matches its own workspace and every workspace in its directory: the row kept is the first one `prefiere` accepts, else the
+ * first one seen.
+ */
+export function unaVez(sesiones: readonly Sesion[], prefiere: (sesion: Sesion) => boolean = () => false): Sesion[] {
+  const porClave = new Map<string, Sesion>();
+  for (const sesion of sesiones) {
+    const previa = porClave.get(sesion.clave);
+    if (!previa || (!prefiere(previa) && prefiere(sesion))) porClave.set(sesion.clave, sesion);
+  }
+  return [...porClave.values()];
+}
+
 /** Newest first; a row without a date goes last, and ties keep the key order so the list never jumps between reloads. */
 export function ordenar(sesiones: readonly Sesion[]): Sesion[] {
   return [...sesiones].sort((a, b) => msDe(b.ultimaActividad) - msDe(a.ultimaActividad) || a.clave.localeCompare(b.clave));
@@ -335,22 +349,47 @@ export interface Filtros {
   readonly rango: Rango;
   /** `todas` keeps both kinds, `archivadas` only the archived rows, `no` only the live ones. */
   readonly archivadas: "todas" | "archivadas" | "no";
-  /** Substring (case and accents ignored) matched against the workspace's name and directory; empty keeps all. */
-  readonly workspace: string;
-  nombre(workspaceId: string): string;
+  /** The project picked in the selector (its id); null keeps every project. */
+  readonly proyecto: string | null;
+  /** The workspace picked in the selector (its id); null keeps every workspace of the project. */
+  readonly workspace: string | null;
+  proyectoDe(workspaceId: string): string | null;
 }
 
 /** The list cut by the header's filters. A row without a date is never "recent": it only survives `todo`. */
 export function filtrar(sesiones: readonly Sesion[], filtros: Filtros, ahora: number = Date.now()): Sesion[] {
   const desde = filtros.rango === "todo" ? Number.NEGATIVE_INFINITY : ahora - MS_DEL_RANGO[filtros.rango];
-  const texto = sinAcentos(filtros.workspace.trim());
   return sesiones.filter((sesion) => {
     if (msDe(sesion.ultimaActividad) < desde) return false;
     if (filtros.archivadas === "archivadas" && !sesion.archivada) return false;
     if (filtros.archivadas === "no" && sesion.archivada) return false;
-    if (texto && !sinAcentos(`${filtros.nombre(sesion.workspaceId)} ${sesion.cwd}`).includes(texto)) return false;
+    if (filtros.workspace !== null && sesion.workspaceId !== filtros.workspace) return false;
+    if (filtros.proyecto !== null && filtros.proyectoDe(sesion.workspaceId) !== filtros.proyecto) return false;
     return true;
   });
+}
+
+/** One option of the project or workspace selector: its id, what it is called and how many rows it holds. */
+export interface Opcion {
+  readonly id: string;
+  readonly nombre: string;
+  readonly n: number;
+}
+
+/**
+ * The selector's options: every group (`de` names it, null = none) that holds rows, most rows first, then by name. The picked
+ * one is always offered, with 0 when it holds none, so a selection never vanishes from the chips.
+ */
+export function opciones(sesiones: readonly Sesion[], de: (sesion: Sesion) => { id: string; nombre: string } | null, elegida: { id: string; nombre: string } | null): Opcion[] {
+  const cuenta = new Map<string, Opcion>();
+  for (const sesion of sesiones) {
+    const grupo = de(sesion);
+    if (!grupo) continue;
+    const previa = cuenta.get(grupo.id);
+    cuenta.set(grupo.id, { id: grupo.id, nombre: grupo.nombre, n: (previa?.n ?? 0) + 1 });
+  }
+  if (elegida && !cuenta.has(elegida.id)) cuenta.set(elegida.id, { ...elegida, n: 0 });
+  return [...cuenta.values()].sort((a, b) => b.n - a.n || a.nombre.localeCompare(b.nombre));
 }
 
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"] as const;

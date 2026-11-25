@@ -16,9 +16,12 @@ id, labels and history); a session never imported becomes a new agent. A search 
 
 Under the search box (SC-6418):
 
-- **Time range**: `1 h · 24 h · 7 d · 30 d · todo`, **24 h by default**. A row without a date only survives `todo`.
+- **Time range**: `1 h · 24 h · 7 d · 30 d · todo`, **todo by default**. A row without a date only survives `todo`.
 - **Archived state**: `todas · archivadas · no archivadas`.
-- **Workspace**: a small box matching a substring of the workspace's name or directory (accents and case ignored).
+- **Proyecto** and **Workspace**: two chip selectors (`Todos` plus one chip per project or workspace with its row count, the
+  rows the range and archived filters leave). By default the workspace the list was opened from and its project; picking a
+  project shows all of it, picking a workspace narrows to it. Each host's daemon lists its own workspaces: the button of a
+  workspace on atlantic lists atlantic's sessions.
 - **transcript entero** (only while searching transcripts): reads each transcript without the 64 MB cap, with a 60 s budget
   per batch instead of 8 s. Without it, the partial limits below apply.
 
@@ -71,9 +74,10 @@ like the `paseo` CLI does (`paseo import` is the same `importAgent` call): same 
 loads the daemon's own client module from the daemon install instead of bundling a copy, so it always speaks the protocol of
 the daemon it runs in.
 
-- One call covers every workspace the host lists (up to 200): one daemon connection, the archived-agent history read once
-  for all, and the native sheet's listing (200 sessions) once per distinct directory. Past 200 workspaces the list says it
-  is partial.
+- One call per distinct directory (the workspaces sharing it go together; the one the list was opened from first, the rest
+  four at a time, and the list fills in as they answer): one daemon connection, the native sheet's listing (200 sessions) of
+  that directory, and the archived-agent history, which the calls of one opening share for 30 s. A directory under several
+  workspaces lists each session once.
 - A session that is both importable and archived is one row, and the archived record wins. An archived agent whose session
   is running as a live agent is hidden (importing it would fail).
 - Transcripts are looked up on the daemon host in `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-cwd>/<sessionId>.jsonl`,

@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import type { Sesion } from "../shared/contract.ts";
-import { type AgenteHistorial, fusionar, ordenar, type Reciente } from "../shared/sesiones.ts";
+import { type AgenteHistorial, fusionar, ordenar, type Reciente, unaVez } from "../shared/sesiones.ts";
 import type { AbreDaemon, Daemon } from "./daemon.ts";
 
 /** The native «Importar sesión» sheet asks for up to 200 sessions per provider: this is the same question. */
@@ -34,6 +34,36 @@ async function todoElHistorial(daemon: Daemon): Promise<AgenteHistorial[]> {
   return agentes;
 }
 
+/** How a list call reads the agent history: straight from the daemon, or through `historialCompartido`. */
+export type LeeHistorial = (daemon: Daemon) => Promise<AgenteHistorial[]>;
+
+/**
+ * The agent history shared by the calls of one opening: a big host's list asks once per workspace (one directory can take 20 s
+ * and the daemon cuts a plugin call at 30 s), and reading 4000+ agents for each of them would cost more than the directories.
+ * shortcut: the history is reused for `ms`, so an agent archived elsewhere inside that window shows at the next opening; a
+ * restore here calls `olvida`. Upgrade to the daemon's agent updates if a stale row ever bites.
+ */
+export function historialCompartido(ms: number, ahora: () => number = Date.now): { lee: LeeHistorial; olvida(): void } {
+  let ultimo: { readonly en: number; readonly lectura: Promise<AgenteHistorial[]> } | null = null;
+  return {
+    lee(daemon) {
+      if (!ultimo || ahora() - ultimo.en > ms) {
+        const lectura = todoElHistorial(daemon);
+        const esta = { en: ahora(), lectura };
+        ultimo = esta;
+        // A failed read is not kept: the next call reads again.
+        lectura.catch(() => {
+          if (ultimo === esta) ultimo = null;
+        });
+      }
+      return ultimo.lectura;
+    },
+    olvida() {
+      ultimo = null;
+    },
+  };
+}
+
 export interface ListaIn {
   readonly workspaceId: string;
   readonly cwd: string;
@@ -55,10 +85,11 @@ export async function listaSesiones(
   abre: AbreDaemon,
   workspaces: readonly ListaIn[],
   canon: (ruta: string) => string = canonicaReal,
+  leeHistorial: LeeHistorial = todoElHistorial,
 ): Promise<ListaOut> {
   const daemon = await abre();
   try {
-    const agentes = await todoElHistorial(daemon);
+    const agentes = await leeHistorial(daemon);
     const avisos: string[] = [];
     const sesiones: Sesion[] = [];
     // One read per distinct directory, shared by the workspaces that live in it.
@@ -69,11 +100,14 @@ export async function listaSesiones(
       recientesPorCwd.set(cwd, recientes.entries);
       avisos.push(...(recientes.providerErrors ?? []).map((e) => `${e.provider}: ${e.message}`));
     }
-    // The same directory under two workspaces lists the same sessions once per workspace: the row says which one it restores into.
     for (const entrada of workspaces) {
       sesiones.push(...fusionar({ recientes: recientesPorCwd.get(entrada.cwd) ?? [], agentes, destino: entrada, canon }));
     }
-    return { sesiones: ordenar(sesiones), avisos: [...new Set(avisos)] };
+    // A directory under several workspaces is one set of sessions: an archived one stays in its agent's workspace when that
+    // one is asked, every other in the first workspace asked (the client puts first the one the list was opened from).
+    const duenoDe = new Map(agentes.map((agente) => [agente.id, agente.workspaceId ?? null]));
+    const enSuWorkspace = (sesion: Sesion) => sesion.archivada !== null && duenoDe.get(sesion.archivada.agentId) === sesion.workspaceId;
+    return { sesiones: ordenar(unaVez(sesiones, enSuWorkspace)), avisos: [...new Set(avisos)] };
   } finally {
     await daemon.close().catch(() => undefined);
   }
