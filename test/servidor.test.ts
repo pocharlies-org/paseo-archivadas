@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { listaSesiones, restauraSesion } from "../server/archivadas.ts";
+import { historialCompartido, listaSesiones, restauraSesion } from "../server/archivadas.ts";
 import { abreDaemonReal, carpetaPaseo, type Daemon, type EntornoDaemon, escuchaDelDaemon, urlDelDaemon } from "../server/daemon.ts";
 
 type Pagina = { entries: { agent: Record<string, unknown> }[]; pageInfo: { hasMore: boolean; nextCursor: string | null } };
@@ -240,4 +240,25 @@ test("abreDaemonReal closes the client when it cannot connect, and explains a ho
   await assert.rejects(sinModulo, /no deja cargar el cliente del daemon.*Cannot find module/);
   const malFormado = abreDaemonReal(() => ({}), entorno({ PASEO_LISTEN: "0.0.0.0:6767" }));
   await assert.rejects(malFormado, /no tiene la forma esperada/);
+});
+
+test("historialCompartido: the calls of one opening share one read; a failed read, the window's end or a restore read again", async () => {
+  let ahora = 0;
+  const historial = historialCompartido(30_000, () => ahora);
+  const { daemon, llamadas } = daemonFalso({ paginas: [{ entries: [archivado("a")], pageInfo: { hasMore: false, nextCursor: null } }] });
+  await listaSesiones(async () => daemon, [entrada], canon, historial.lee);
+  await listaSesiones(async () => daemon, [{ workspaceId: "wks_b", cwd: "/work/otro" }], canon, historial.lee);
+  assert.equal(llamadas.historial.length, 1, "the second workspace reuses the first read");
+  ahora = 30_001;
+  await listaSesiones(async () => daemon, [entrada], canon, historial.lee);
+  assert.equal(llamadas.historial.length, 2, "past the window the history is read again");
+  historial.olvida();
+  await listaSesiones(async () => daemon, [entrada], canon, historial.lee);
+  assert.equal(llamadas.historial.length, 3, "a restore forgets it");
+
+  const roto = daemonFalso({ fallaEn: "historial" });
+  const otro = historialCompartido(30_000, () => 0);
+  await assert.rejects(listaSesiones(async () => roto.daemon, [entrada], canon, otro.lee));
+  await assert.rejects(listaSesiones(async () => roto.daemon, [entrada], canon, otro.lee));
+  assert.equal(roto.llamadas.historial.length, 2, "a failed read is not kept");
 });

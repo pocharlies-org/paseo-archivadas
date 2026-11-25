@@ -16,7 +16,6 @@ import {
   type BusquedaOut,
   MAX_COMPROBACIONES,
   MAX_CONSULTA,
-  MAX_WORKSPACES,
   MIN_CONSULTA,
   type Sesion,
   transcriptsBuscar,
@@ -34,6 +33,7 @@ import {
   opciones,
   type Opcion,
   hace,
+  ordenar,
   porComprobar,
   RANGOS,
   type Rango,
@@ -63,7 +63,7 @@ const ETIQUETA_ARCHIVADAS: Record<ArchivadasFiltro, string> = { todas: "todas", 
 type Estado =
   | { readonly fase: "cargando" }
   | { readonly fase: "error"; readonly mensaje: string }
-  | { readonly fase: "listo"; readonly sesiones: readonly Sesion[]; readonly avisos: readonly string[] };
+  | { readonly fase: "listo"; readonly sesiones: readonly Sesion[]; readonly avisos: readonly string[]; readonly quedan: number };
 
 /** A search inside the transcripts, for the query it was run with. */
 type Busqueda =
@@ -73,6 +73,9 @@ type Busqueda =
   | { readonly fase: "lista"; readonly consulta: string; readonly resultados: readonly BusquedaOut[] };
 
 const SIN_LISTA: readonly Sesion[] = [];
+
+/** Directories read at once while the list fills in: enough to be quick, few enough not to crowd the daemon. */
+const LECTURAS_A_LA_VEZ = 4;
 
 const mensajeDe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -149,6 +152,18 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
     readonly enPanel?: boolean;
   }
 
+  // The rows are shown once it is known which archived ones still have their history: no row flips from yellow to dim. A
+  // failed lookup leaves them restorable (the daemon refuses and rolls back what it cannot resume); the server takes a bounded
+  // number of sessions per call, so a long list goes in batches.
+  async function conSuHistorial(sesiones: readonly Sesion[]): Promise<readonly Sesion[]> {
+    const pendientes = porComprobar(sesiones);
+    if (pendientes.length === 0) return sesiones;
+    const respuestas = await Promise.all(
+      enTandas(pendientes, MAX_COMPROBACIONES).map((tanda) => client.rpc(transcriptsCheck, { sesiones: tanda }).catch(() => ({ resultados: [] }))),
+    );
+    return conHistorial(sesiones, respuestas.flatMap((r) => r.resultados));
+  }
+
   function ListaDeSesiones({ theme, layout, workspaceId, abre, alTerminar, enPanel }: ListaProps) {
     const [estado, setEstado] = useState<Estado>({ fase: "cargando" });
     const [texto, setTexto] = useState("");
@@ -172,37 +187,54 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       let cancelado = false;
       setEstado({ fase: "cargando" });
       void (async () => {
+        let validos: (readonly [string, DatosWorkspace])[];
         try {
           // A panel restored with the page can mount before the workspace subscription has answered: ask the host then.
-          const validos: (readonly [string, DatosWorkspace])[] = [...datos.entries()];
+          validos = [...datos.entries()];
           if (validos.length === 0) {
             const destino = await resuelveWorkspace(workspaceId);
             if (!destino) throw new Error("Este workspace ya no existe");
             validos.push([workspaceId, destino]);
           }
-          // shortcut: one call covers at most MAX_WORKSPACES workspaces; past that the list is partial and says so.
-          const cortados = validos.length > MAX_WORKSPACES;
-          const { sesiones, avisos: avisosServidor } = await client.rpc(archivadasList, {
-            workspaces: validos.slice(0, MAX_WORKSPACES).map(([id, d]) => ({ workspaceId: id, cwd: d.cwd })),
-          });
-          const avisos = cortados ? [...avisosServidor, `más de ${MAX_WORKSPACES} workspaces: solo se lista una parte`] : avisosServidor;
-          // The list is shown once it knows which archived rows still have their history: no row flips from yellow to dim.
-          const pendientes = porComprobar(sesiones);
-          let conTodo: readonly Sesion[] = sesiones;
-          if (pendientes.length > 0) {
-            // A failed lookup leaves the rows as restorable: the daemon refuses and rolls back what it cannot resume. The server
-            // takes a bounded number of sessions per call, so a long list goes in batches.
-            const respuestas = await Promise.all(
-              enTandas(pendientes, MAX_COMPROBACIONES).map((tanda) =>
-                client.rpc(transcriptsCheck, { sesiones: tanda }).catch(() => ({ resultados: [] })),
-              ),
-            );
-            conTodo = conHistorial(sesiones, respuestas.flatMap((r) => r.resultados));
-          }
-          if (!cancelado) setEstado({ fase: "listo", sesiones: conTodo, avisos });
         } catch (error) {
           if (!cancelado) setEstado({ fase: "error", mensaje: mensajeDe(error) });
+          return;
         }
+        // One call per directory (the workspaces sharing it go together): one directory can take 20 s on a big host and the
+        // daemon cuts a plugin call at 30 s. The workspace the list was opened from goes first and alone; the rest follow a
+        // few at a time, and the list fills in as they answer.
+        const porCwd = new Map<string, { workspaceId: string; cwd: string }[]>();
+        for (const [id, d] of validos) porCwd.set(d.cwd, [...(porCwd.get(d.cwd) ?? []), { workspaceId: id, cwd: d.cwd }]);
+        const grupos = [...porCwd.values()].sort((x, y) => Number(y.some((w) => w.workspaceId === workspaceId)) - Number(x.some((w) => w.workspaceId === workspaceId)));
+        let sesiones: readonly Sesion[] = [];
+        const avisos = new Set<string>();
+        let fallidos = 0;
+        let primerError: unknown = null;
+        let quedan = grupos.length;
+        const lee = async (grupo: { workspaceId: string; cwd: string }[]) => {
+          try {
+            const respuesta = await client.rpc(archivadasList, { workspaces: grupo });
+            const conTodo = await conSuHistorial(respuesta.sesiones);
+            sesiones = ordenar([...sesiones, ...conTodo]);
+            for (const aviso of respuesta.avisos) avisos.add(aviso);
+          } catch (error) {
+            fallidos += grupo.length;
+            primerError ??= error;
+          }
+          quedan -= 1;
+          if (cancelado) return;
+          if (quedan === 0 && sesiones.length === 0 && primerError) return setEstado({ fase: "error", mensaje: mensajeDe(primerError) });
+          const falta = fallidos > 0 ? [`${fallidos} ${fallidos === 1 ? "workspace no se pudo leer" : "workspaces no se pudieron leer"}: ${mensajeDe(primerError)}`] : [];
+          setEstado({ fase: "listo", sesiones, avisos: [...avisos, ...falta], quedan });
+        };
+        const [primero, ...resto] = grupos;
+        if (primero) await lee(primero);
+        const cola = [...resto];
+        await Promise.all(
+          Array.from({ length: Math.min(LECTURAS_A_LA_VEZ, cola.length) }, async () => {
+            for (let grupo = cola.shift(); grupo && !cancelado; grupo = cola.shift()) await lee(grupo);
+          }),
+        );
       })();
       return () => {
         cancelado = true;
@@ -330,10 +362,12 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
     const porTexto = useMemo(() => buscar(base, texto), [base, texto]);
     const filtradas = enTranscripts ? (transcripts?.filas ?? SIN_LISTA) : porTexto;
     const archivadas = filtradas.filter((s) => s.archivada).length;
+    const quedan = estado.fase === "listo" ? estado.quedan : 0;
     const cuenta = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
     const resumenCuenta = [
       filtradas.length === todas.length ? cuenta(todas.length, "sesión", "sesiones") : `${filtradas.length} de ${cuenta(todas.length, "sesión", "sesiones")}`,
       archivadas > 0 ? cuenta(archivadas, "archivada", "archivadas") : "",
+      quedan > 0 ? `leyendo ${cuenta(quedan, "directorio", "directorios")} más…` : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -402,6 +436,10 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
               <Text style={{ color: colores.foreground, fontSize: 13 }}>Reintentar</Text>
             </Pressable>
           </View>
+        ) : filtradas.length === 0 && quedan > 0 ? (
+          <Aviso theme={theme} cargando>
+            {`Cargando sesiones… (${cuenta(quedan, "directorio", "directorios")} por leer)`}
+          </Aviso>
         ) : filtradas.length === 0 ? (
           <Aviso theme={theme}>
             {todas.length === 0
