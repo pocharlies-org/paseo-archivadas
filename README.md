@@ -74,9 +74,10 @@ like the `paseo` CLI does (`paseo import` is the same `importAgent` call): same 
 loads the daemon's own client module from the daemon install instead of bundling a copy, so it always speaks the protocol of
 the daemon it runs in.
 
-- One call covers every workspace the host lists (up to 200): one daemon connection, the archived-agent history read once
-  for all, and the native sheet's listing (200 sessions) once per distinct directory. Past 200 workspaces the list says it
-  is partial.
+- One call per distinct directory (the workspaces sharing it go together; the one the list was opened from first, the rest
+  four at a time, and the list fills in as they answer): one daemon connection, the native sheet's listing (200 sessions) of
+  that directory, and the archived-agent history, which the calls of one opening share for 30 s. A directory under several
+  workspaces lists each session once.
 - A session that is both importable and archived is one row, and the archived record wins. An archived agent whose session
   is running as a live agent is hidden (importing it would fail).
 - Transcripts are looked up on the daemon host in `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-cwd>/<sessionId>.jsonl`,

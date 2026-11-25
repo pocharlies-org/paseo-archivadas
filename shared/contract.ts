@@ -10,7 +10,7 @@ import { z } from "zod";
 export const MAX_ID = 200;
 export const MAX_RUTA = 4096;
 export const MAX_COMPROBACIONES = 500;
-/** Workspaces the multi-workspace list takes per call: the host has hundreds, and one call per screen must bound its daemon reads. */
+/** Workspaces the multi-workspace list takes per call: the host has hundreds, and a call must bound its daemon reads (the client sends one directory's workspaces per call). */
 export const MAX_WORKSPACES = 200;
 /** A transcript search: what is typed is bounded like the search box, and a query shorter than this matches almost everything. */
 export const MAX_CONSULTA = 500;
@@ -51,7 +51,7 @@ export type Sesion = z.infer<typeof SesionSchema>;
 
 const WorkspaceIn = z.object({ workspaceId: Id, cwd: Ruta }).strict();
 
-/** The importable sessions and archived agents of every workspace asked, merged per workspace, newest first. */
+/** The importable sessions and archived agents of every workspace asked, each session once, newest first. */
 export const archivadasList = defineRpc({
   name: "archivadas.list",
   input: z.object({ workspaces: z.array(WorkspaceIn).max(MAX_WORKSPACES) }).strict(),

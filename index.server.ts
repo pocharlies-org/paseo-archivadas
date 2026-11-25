@@ -8,7 +8,7 @@ import { comprobarTranscripts, discoReal } from "./server/transcripts.ts";
 // The bundle gets Node's `require` from the host at run time: the daemon's own client is resolved there, not bundled.
 declare const require: (nombre: string) => unknown;
 
-// The client lists a host one workspace per call: the calls of one opening share one read of the agent history.
+// The client lists a host one directory per call: the calls of one opening share one read of the agent history.
 const HISTORIAL_MS = 30_000;
 
 // Paseo refuses a contribution that returns no cleanup; every daemon connection is opened and closed inside its request.
