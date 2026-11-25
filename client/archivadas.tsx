@@ -39,6 +39,7 @@ import {
   type Rango,
   restaurable,
   subtituloDe,
+  unaVez,
 } from "../shared/sesiones.ts";
 import { type DatosWorkspace, destinoDe, vigilaWorkspaces } from "./workspaces.ts";
 
@@ -204,7 +205,9 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
         // daemon cuts a plugin call at 30 s. The workspace the list was opened from goes first and alone; the rest follow a
         // few at a time, and the list fills in as they answer.
         const porCwd = new Map<string, { workspaceId: string; cwd: string }[]>();
-        for (const [id, d] of validos) porCwd.set(d.cwd, [...(porCwd.get(d.cwd) ?? []), { workspaceId: id, cwd: d.cwd }]);
+        // The one it was opened from goes first in its directory too: the server puts the directory's sessions in the first one.
+        const enOrden = [...validos].sort(([a], [b]) => Number(b === workspaceId) - Number(a === workspaceId));
+        for (const [id, d] of enOrden) porCwd.set(d.cwd, [...(porCwd.get(d.cwd) ?? []), { workspaceId: id, cwd: d.cwd }]);
         const grupos = [...porCwd.values()].sort((x, y) => Number(y.some((w) => w.workspaceId === workspaceId)) - Number(x.some((w) => w.workspaceId === workspaceId)));
         let sesiones: readonly Sesion[] = [];
         const avisos = new Set<string>();
@@ -215,7 +218,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           try {
             const respuesta = await client.rpc(archivadasList, { workspaces: grupo });
             const conTodo = await conSuHistorial(respuesta.sesiones);
-            sesiones = ordenar([...sesiones, ...conTodo]);
+            sesiones = ordenar(unaVez([...sesiones, ...conTodo]));
             for (const aviso of respuesta.avisos) avisos.add(aviso);
           } catch (error) {
             fallidos += grupo.length;

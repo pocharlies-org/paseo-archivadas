@@ -74,6 +74,20 @@ const msDe = (iso: string | null | undefined): number => {
   return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 };
 
+/**
+ * Each session once. A directory under several workspaces lists the same sessions for each of them, and an archived agent
+ * matches its own workspace and every workspace in its directory: the row kept is the first one `prefiere` accepts, else the
+ * first one seen.
+ */
+export function unaVez(sesiones: readonly Sesion[], prefiere: (sesion: Sesion) => boolean = () => false): Sesion[] {
+  const porClave = new Map<string, Sesion>();
+  for (const sesion of sesiones) {
+    const previa = porClave.get(sesion.clave);
+    if (!previa || (!prefiere(previa) && prefiere(sesion))) porClave.set(sesion.clave, sesion);
+  }
+  return [...porClave.values()];
+}
+
 /** Newest first; a row without a date goes last, and ties keep the key order so the list never jumps between reloads. */
 export function ordenar(sesiones: readonly Sesion[]): Sesion[] {
   return [...sesiones].sort((a, b) => msDe(b.ultimaActividad) - msDe(a.ultimaActividad) || a.clave.localeCompare(b.clave));

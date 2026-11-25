@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import type { Sesion } from "../shared/contract.ts";
-import { type AgenteHistorial, fusionar, ordenar, type Reciente } from "../shared/sesiones.ts";
+import { type AgenteHistorial, fusionar, ordenar, type Reciente, unaVez } from "../shared/sesiones.ts";
 import type { AbreDaemon, Daemon } from "./daemon.ts";
 
 /** The native «Importar sesión» sheet asks for up to 200 sessions per provider: this is the same question. */
@@ -100,11 +100,14 @@ export async function listaSesiones(
       recientesPorCwd.set(cwd, recientes.entries);
       avisos.push(...(recientes.providerErrors ?? []).map((e) => `${e.provider}: ${e.message}`));
     }
-    // The same directory under two workspaces lists the same sessions once per workspace: the row says which one it restores into.
     for (const entrada of workspaces) {
       sesiones.push(...fusionar({ recientes: recientesPorCwd.get(entrada.cwd) ?? [], agentes, destino: entrada, canon }));
     }
-    return { sesiones: ordenar(sesiones), avisos: [...new Set(avisos)] };
+    // A directory under several workspaces is one set of sessions: an archived one stays in its agent's workspace when that
+    // one is asked, every other in the first workspace asked (the client puts first the one the list was opened from).
+    const duenoDe = new Map(agentes.map((agente) => [agente.id, agente.workspaceId ?? null]));
+    const enSuWorkspace = (sesion: Sesion) => sesion.archivada !== null && duenoDe.get(sesion.archivada.agentId) === sesion.workspaceId;
+    return { sesiones: ordenar(unaVez(sesiones, enSuWorkspace)), avisos: [...new Set(avisos)] };
   } finally {
     await daemon.close().catch(() => undefined);
   }

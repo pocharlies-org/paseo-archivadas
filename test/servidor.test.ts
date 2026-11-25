@@ -130,9 +130,10 @@ test("listaSesiones lee el historial una vez para todos los workspaces y los rec
   assert.equal(llamadas.historial.length, 1, "one history read for all workspaces");
   assert.deepEqual(llamadas.recientes.map((l) => (l as { cwd: string }).cwd), ["/work/proyecto", "/otro/sitio"], "one read per distinct cwd");
   assert.equal(llamadas.cerrado, 1, "one connection for the whole call");
-  assert.ok(
-    sesiones.filter((f) => f.archivada).some((f) => f.workspaceId === "wks_a") && sesiones.filter((f) => f.archivada).some((f) => f.workspaceId === "wks_c"),
-    "the same archived agent is listed under each workspace it belongs to, tagged with its restore destination",
+  assert.deepEqual(
+    sesiones.filter((f) => f.archivada).map((f) => f.workspaceId),
+    ["wks_a"],
+    "an archived agent is listed once, in its own workspace, though wks_c shares its directory",
   );
 });
 
@@ -240,6 +241,20 @@ test("abreDaemonReal closes the client when it cannot connect, and explains a ho
   await assert.rejects(sinModulo, /no deja cargar el cliente del daemon.*Cannot find module/);
   const malFormado = abreDaemonReal(() => ({}), entorno({ PASEO_LISTEN: "0.0.0.0:6767" }));
   await assert.rejects(malFormado, /no tiene la forma esperada/);
+});
+
+test("listaSesiones lists a directory's sessions once, in the first workspace asked, when several workspaces share it", async () => {
+  const reciente = { providerId: "claude", providerLabel: "Claude", providerHandleId: "s-x", cwd: "/work/proyecto", title: "x", firstPromptPreview: null, lastPromptPreview: null, lastActivityAt: "2026-11-06T10:00:00.000Z" };
+  const { daemon } = daemonFalso({
+    recientes: { entries: [reciente] },
+    paginas: [{ entries: [archivado("a1", { workspaceId: "wks_c" })], pageInfo: { hasMore: false, nextCursor: null } }],
+  });
+  const { sesiones } = await listaSesiones(async () => daemon, [entrada, { workspaceId: "wks_c", cwd: "/work/proyecto" }], canon);
+  assert.deepEqual(
+    sesiones.map((f) => [f.providerHandleId, f.workspaceId]).sort(),
+    [["s-a1", "wks_c"], ["s-x", "wks_a"]],
+    "the archived one in its agent's workspace, the never-imported one in the first asked",
+  );
 });
 
 test("historialCompartido: the calls of one opening share one read; a failed read, the window's end or a restore read again", async () => {
