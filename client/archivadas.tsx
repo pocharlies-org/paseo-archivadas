@@ -16,6 +16,7 @@ import {
   type BusquedaOut,
   MAX_COMPROBACIONES,
   MAX_CONSULTA,
+  MAX_WORKSPACES,
   MIN_CONSULTA,
   type Sesion,
   transcriptsBuscar,
@@ -29,8 +30,11 @@ import {
   conTranscripts,
   enTandas,
   etiquetaArchivada,
+  filtrar,
   hace,
   porComprobar,
+  RANGOS,
+  type Rango,
   restaurable,
   subtituloDe,
 } from "../shared/sesiones.ts";
@@ -48,6 +52,11 @@ const FILAS_POR_TANDA = 60;
 const ALTO_NOTA = 22;
 /** Pause in the typing after which a transcript search runs (Enter runs it at once): never one search per keystroke. */
 const ESPERA_BUSQUEDA_MS = 400;
+
+/** How each time range reads on its chip. `todo` keeps archived sessions older than 30 days reachable. */
+const ETIQUETA_RANGO: Record<Rango, string> = { "1h": "1 h", "24h": "24 h", "7d": "7 d", "30d": "30 d", todo: "todo" };
+type ArchivadasFiltro = "todas" | "archivadas" | "no";
+const ETIQUETA_ARCHIVADAS: Record<ArchivadasFiltro, string> = { todas: "todas", archivadas: "archivadas", no: "no archivadas" };
 
 type Estado =
   | { readonly fase: "cargando" }
@@ -142,6 +151,11 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
     const [estado, setEstado] = useState<Estado>({ fase: "cargando" });
     const [texto, setTexto] = useState("");
     const [enTranscripts, setEnTranscripts] = useState(false);
+    // The header's filters (SC-6418): time range (24 h by default), archived state, workspace substring and whole-transcript search.
+    const [rango, setRango] = useState<Rango>("24h");
+    const [archivadasFiltro, setArchivadasFiltro] = useState<ArchivadasFiltro>("todas");
+    const [wsTexto, setWsTexto] = useState("");
+    const [completo, setCompleto] = useState(false);
     // The query a transcript search runs with: set after a pause in the typing or on Enter, so the search does not follow
     // every keystroke. Null when not searching transcripts.
     const [consulta, setConsulta] = useState<string | null>(null);
@@ -156,9 +170,18 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       void (async () => {
         try {
           // A panel restored with the page can mount before the workspace subscription has answered: ask the host then.
-          const destino = datos.get(workspaceId) ?? (await resuelveWorkspace(workspaceId));
-          if (!destino) throw new Error("Este workspace ya no existe");
-          const { sesiones, avisos } = await client.rpc(archivadasList, { workspaceId, cwd: destino.cwd, projectKey: destino.projectKey });
+          const validos: (readonly [string, DatosWorkspace])[] = [...datos.entries()];
+          if (validos.length === 0) {
+            const destino = await resuelveWorkspace(workspaceId);
+            if (!destino) throw new Error("Este workspace ya no existe");
+            validos.push([workspaceId, destino]);
+          }
+          // shortcut: one call covers at most MAX_WORKSPACES workspaces; past that the list is partial and says so.
+          const cortados = validos.length > MAX_WORKSPACES;
+          const { sesiones, avisos: avisosServidor } = await client.rpc(archivadasList, {
+            workspaces: validos.slice(0, MAX_WORKSPACES).map(([id, d]) => ({ workspaceId: id, cwd: d.cwd })),
+          });
+          const avisos = cortados ? [...avisosServidor, `más de ${MAX_WORKSPACES} workspaces: solo se lista una parte`] : avisosServidor;
           // The list is shown once it knows which archived rows still have their history: no row flips from yellow to dim.
           const pendientes = porComprobar(sesiones);
           let conTodo: readonly Sesion[] = sesiones;
@@ -202,7 +225,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
             providerId: sesion.providerId,
             providerHandleId: sesion.providerHandleId,
             cwd: sesion.cwd,
-            workspaceId,
+            workspaceId: sesion.workspaceId,
           });
           alTerminar?.();
           abre(agentId);
@@ -215,7 +238,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           setRestaurando(null);
         }
       },
-      [workspaceId, alTerminar, abre, enPanel],
+      [alTerminar, abre, enPanel],
     );
 
     const todas = estado.fase === "listo" ? estado.sesiones : SIN_LISTA;
@@ -229,9 +252,15 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       return () => clearTimeout(espera);
     }, [texto, enTranscripts]);
 
-    // One search per query (and per list loaded): a newer query cancels this one's answer, which is then dropped.
+    // The list the filters leave: what the text search, the transcript search and the rows read from.
+    const base = useMemo(
+      () => filtrar(todas, { rango, archivadas: archivadasFiltro, workspace: wsTexto, nombre: (id) => datos.get(id)?.nombre ?? id }),
+      [todas, rango, archivadasFiltro, wsTexto],
+    );
+
+    // One search per query (and per filtered list): a newer query cancels this one's answer, which is then dropped.
     useEffect(() => {
-      if (!enTranscripts || consulta === null || consulta.length < MIN_CONSULTA || estado.fase !== "listo") {
+      if (!enTranscripts || consulta === null || consulta.length < MIN_CONSULTA || base.length === 0) {
         setBusqueda({ fase: "inactiva" });
         return;
       }
@@ -242,9 +271,9 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           // The server takes a bounded number of sessions per call, and each call reads files for up to its time budget: the
           // batches go one after the other, not all at once.
           const resultados: BusquedaOut[] = [];
-          for (const tanda of enTandas(aBuscarEnTranscripts(estado.sesiones), MAX_COMPROBACIONES)) {
+          for (const tanda of enTandas(aBuscarEnTranscripts(base), MAX_COMPROBACIONES)) {
             if (cancelado) return;
-            resultados.push(...(await client.rpc(transcriptsBuscar, { query: consulta, sesiones: tanda })).resultados);
+            resultados.push(...(await client.rpc(transcriptsBuscar, { query: consulta, sesiones: tanda, completo })).resultados);
           }
           if (!cancelado) setBusqueda({ fase: "lista", consulta, resultados });
         } catch (error) {
@@ -254,7 +283,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       return () => {
         cancelado = true;
       };
-    }, [consulta, enTranscripts, estado]);
+    }, [consulta, enTranscripts, completo, base]);
 
     const enviaBusqueda = () => {
       if (enTranscripts) setConsulta(texto.trim());
@@ -264,8 +293,8 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       setVisibles(FILAS_POR_TANDA);
     };
 
-    const transcripts = useMemo(() => (busqueda.fase === "lista" ? conTranscripts(todas, busqueda.resultados) : null), [busqueda, todas]);
-    const porTexto = useMemo(() => buscar(todas, texto), [todas, texto]);
+    const transcripts = useMemo(() => (busqueda.fase === "lista" ? conTranscripts(base, busqueda.resultados) : null), [busqueda, base]);
+    const porTexto = useMemo(() => buscar(base, texto), [base, texto]);
     const filtradas = enTranscripts ? (transcripts?.filas ?? SIN_LISTA) : porTexto;
     const archivadas = filtradas.filter((s) => s.archivada).length;
     const cuenta = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
@@ -289,6 +318,37 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           onCambiaModo={cambiaModo}
           onEnvia={enviaBusqueda}
         />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+          {RANGOS.map((r) => (
+            <Chip key={r} theme={theme} activo={rango === r} onPress={() => setRango(r)}>
+              {ETIQUETA_RANGO[r]}
+            </Chip>
+          ))}
+          {(["todas", "archivadas", "no"] as const).map((a) => (
+            <Chip key={a} theme={theme} activo={archivadasFiltro === a} onPress={() => setArchivadasFiltro(a)}>
+              {ETIQUETA_ARCHIVADAS[a]}
+            </Chip>
+          ))}
+          <TextInput
+            value={wsTexto}
+            onChangeText={setWsTexto}
+            placeholder="workspace…"
+            placeholderTextColor={colores.foregroundMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={MAX_CONSULTA}
+            accessibilityLabel="Filtrar por workspace"
+            style={[
+              { flex: 1, minWidth: 96, color: colores.foreground, fontSize: 11, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: colores.border, borderRadius: 6, backgroundColor: colores.surface0 },
+              { outlineStyle: "none" } as object,
+            ]}
+          />
+          {enTranscripts ? (
+            <Chip theme={theme} activo={completo} onPress={() => setCompleto((v) => !v)}>
+              transcript entero
+            </Chip>
+          ) : null}
+        </View>
         {estado.fase === "cargando" ? (
           <Aviso theme={theme} cargando>
             Cargando sesiones…
@@ -306,7 +366,7 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
           </View>
         ) : enTranscripts && texto.trim().length < MIN_CONSULTA ? (
           <Aviso theme={theme}>{`Escribe al menos ${MIN_CONSULTA} caracteres para buscar en los transcripts`}</Aviso>
-        ) : enTranscripts && (busqueda.fase === "buscando" || busqueda.fase === "inactiva") ? (
+        ) : enTranscripts && (busqueda.fase === "buscando" || (busqueda.fase === "inactiva" && base.length > 0)) ? (
           <Aviso theme={theme} cargando>
             Buscando en transcripts…
           </Aviso>
@@ -324,10 +384,12 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
         ) : filtradas.length === 0 ? (
           <Aviso theme={theme}>
             {todas.length === 0
-              ? "No hay sesiones en este workspace"
+              ? "No hay sesiones"
               : enTranscripts
                 ? `Ningún transcript contiene «${busqueda.fase === "lista" ? busqueda.consulta : texto.trim()}»`
-                : `Nada coincide con «${texto.trim()}»`}
+                : texto.trim()
+                  ? `Nada coincide con «${texto.trim()}»`
+                  : "Nada coincide con los filtros"}
           </Aviso>
         ) : (
           <>
@@ -457,6 +519,27 @@ function Buscador({ theme, texto, onChange, enTranscripts, onCambiaModo, onEnvia
         <Icon name="TextSearch" size={14} color={enTranscripts ? colors.accent : colors.foregroundMuted} />
       </Pressable>
     </View>
+  );
+}
+
+function Chip({ theme, activo, onPress, children }: { theme: Tema; activo: boolean; onPress(): void; children: string }) {
+  const { colors } = theme;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: activo }}
+      onPress={onPress}
+      style={{
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: activo ? colors.accent : colors.border,
+        backgroundColor: activo ? (conAlfa(colors.accent, 0.16) ?? colors.surface2) : "transparent",
+      }}
+    >
+      <Text style={{ color: activo ? colors.accent : colors.foregroundMuted, fontSize: 11 }}>{children}</Text>
+    </Pressable>
   );
 }
 

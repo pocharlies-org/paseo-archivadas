@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import type { Sesion } from "../shared/contract.ts";
-import { type AgenteHistorial, fusionar, type Reciente } from "../shared/sesiones.ts";
+import { type AgenteHistorial, fusionar, ordenar, type Reciente } from "../shared/sesiones.ts";
 import type { AbreDaemon, Daemon } from "./daemon.ts";
 
 /** The native «Importar sesión» sheet asks for up to 200 sessions per provider: this is the same question. */
@@ -18,12 +18,12 @@ export function canonicaReal(ruta: string): string {
   }
 }
 
-async function todoElHistorial(daemon: Daemon, projectKey: string | null): Promise<AgenteHistorial[]> {
+async function todoElHistorial(daemon: Daemon): Promise<AgenteHistorial[]> {
   const agentes: AgenteHistorial[] = [];
   let cursor: string | undefined;
   for (let pagina = 0; pagina < MAX_PAGINAS; pagina += 1) {
     const respuesta = await daemon.fetchAgentHistory({
-      filter: { includeArchived: true, ...(projectKey ? { projectKeys: [projectKey] } : {}) },
+      filter: { includeArchived: true },
       sort: [{ key: "updated_at", direction: "desc" }],
       page: { limit: LIMITE_PAGINA, ...(cursor ? { cursor } : {}) },
     });
@@ -37,7 +37,6 @@ async function todoElHistorial(daemon: Daemon, projectKey: string | null): Promi
 export interface ListaIn {
   readonly workspaceId: string;
   readonly cwd: string;
-  readonly projectKey: string | null;
 }
 
 export interface ListaOut {
@@ -47,25 +46,34 @@ export interface ListaOut {
 }
 
 /**
- * The sessions the native sheet would show for the workspace's directory, plus every archived agent of the workspace
- * (its id, or the same directory), merged by provider session. The two reads go over one short connection.
+ * The sessions the native sheet would show for each asked workspace, plus every archived agent of it (its id, or the same
+ * directory), merged by provider session. One daemon connection for the whole call: the agent history is read once for all
+ * workspaces (archived agents are matched to their destination by id or directory anyway), and the recent-session listing
+ * once per distinct directory.
  */
 export async function listaSesiones(
   abre: AbreDaemon,
-  entrada: ListaIn,
+  workspaces: readonly ListaIn[],
   canon: (ruta: string) => string = canonicaReal,
 ): Promise<ListaOut> {
   const daemon = await abre();
   try {
-    const [recientes, agentes] = await Promise.all([
-      daemon.fetchRecentProviderSessions({ cwd: entrada.cwd, limit: LIMITE_RECIENTES }),
-      todoElHistorial(daemon, entrada.projectKey),
-    ]);
-    const entradas: Reciente[] = recientes.entries;
-    return {
-      sesiones: fusionar({ recientes: entradas, agentes, destino: { workspaceId: entrada.workspaceId, cwd: entrada.cwd }, canon }),
-      avisos: (recientes.providerErrors ?? []).map((e) => `${e.provider}: ${e.message}`),
-    };
+    const agentes = await todoElHistorial(daemon);
+    const avisos: string[] = [];
+    const sesiones: Sesion[] = [];
+    // One read per distinct directory, shared by the workspaces that live in it.
+    const recientesPorCwd = new Map<string, Reciente[]>();
+    for (const { cwd } of workspaces) {
+      if (recientesPorCwd.has(cwd)) continue;
+      const recientes = await daemon.fetchRecentProviderSessions({ cwd, limit: LIMITE_RECIENTES });
+      recientesPorCwd.set(cwd, recientes.entries);
+      avisos.push(...(recientes.providerErrors ?? []).map((e) => `${e.provider}: ${e.message}`));
+    }
+    // The same directory under two workspaces lists the same sessions once per workspace: the row says which one it restores into.
+    for (const entrada of workspaces) {
+      sesiones.push(...fusionar({ recientes: recientesPorCwd.get(entrada.cwd) ?? [], agentes, destino: entrada, canon }));
+    }
+    return { sesiones: ordenar(sesiones), avisos: [...new Set(avisos)] };
   } finally {
     await daemon.close().catch(() => undefined);
   }

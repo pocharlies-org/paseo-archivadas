@@ -49,10 +49,10 @@ const archivado = (id: string, extra: Record<string, unknown> = {}) => ({
   },
 });
 
-const entrada = { workspaceId: "wks_a", cwd: "/work/proyecto", projectKey: "prj_1" };
+const entrada = { workspaceId: "wks_a", cwd: "/work/proyecto" };
 const canon = (ruta: string) => ruta;
 
-test("listaSesiones asks for what the native sheet asks (200 sessions of the directory) and the whole archived history of the project", async () => {
+test("listaSesiones asks for what the native sheet asks (200 sessions of the directory) and the whole archived history", async () => {
   const { daemon, llamadas } = daemonFalso({
     recientes: {
       entries: [
@@ -70,9 +70,9 @@ test("listaSesiones asks for what the native sheet asks (200 sessions of the dir
     },
     paginas: [{ entries: [archivado("a1")], pageInfo: { hasMore: false, nextCursor: null } }],
   });
-  const { sesiones, avisos } = await listaSesiones(async () => daemon, entrada, canon);
+  const { sesiones, avisos } = await listaSesiones(async () => daemon, [entrada], canon);
   assert.deepEqual(llamadas.recientes, [{ cwd: "/work/proyecto", limit: 200 }]);
-  assert.deepEqual((llamadas.historial[0] as { filter: unknown }).filter, { includeArchived: true, projectKeys: ["prj_1"] });
+  assert.deepEqual((llamadas.historial[0] as { filter: unknown }).filter, { includeArchived: true }, "the history is read once for every workspace, without narrowing by project");
   assert.deepEqual(
     sesiones.map((s) => [s.providerHandleId, s.archivada?.agentId ?? null]),
     [
@@ -84,7 +84,7 @@ test("listaSesiones asks for what the native sheet asks (200 sessions of the dir
   assert.equal(llamadas.cerrado, 1, "the connection is closed after the read");
 });
 
-test("listaSesiones follows the history cursor to the end and does not narrow by project when the workspace has none", async () => {
+test("listaSesiones follows the history cursor to the end and never narrows it by project", async () => {
   const { daemon, llamadas } = daemonFalso({
     paginas: [
       { entries: [archivado("a1")], pageInfo: { hasMore: true, nextCursor: "c1" } },
@@ -92,7 +92,7 @@ test("listaSesiones follows the history cursor to the end and does not narrow by
       { entries: [archivado("a3")], pageInfo: { hasMore: false, nextCursor: null } },
     ],
   });
-  const { sesiones } = await listaSesiones(async () => daemon, { ...entrada, projectKey: null }, canon);
+  const { sesiones } = await listaSesiones(async () => daemon, [entrada], canon);
   assert.equal(sesiones.length, 3);
   assert.equal(llamadas.historial.length, 3);
   assert.equal((llamadas.historial[0] as { page: { cursor?: string } }).page.cursor, undefined);
@@ -104,7 +104,7 @@ test("listaSesiones follows the history cursor to the end and does not narrow by
 test("listaSesiones stops a cursor that never ends", async () => {
   const siempre: Pagina = { entries: [archivado("a1")], pageInfo: { hasMore: true, nextCursor: "mismo" } };
   const { daemon, llamadas } = daemonFalso({ paginas: Array.from({ length: 500 }, () => siempre) });
-  await listaSesiones(async () => daemon, entrada, canon);
+  await listaSesiones(async () => daemon, [entrada], canon);
   assert.ok(llamadas.historial.length <= 50, `${llamadas.historial.length} pages`);
 });
 
@@ -113,15 +113,33 @@ test("listaSesiones reports the providers whose listing failed, and still lists 
     recientes: { entries: [], providerErrors: [{ provider: "codex", message: "no está instalado" }] },
     paginas: [{ entries: [archivado("a1")], pageInfo: { hasMore: false, nextCursor: null } }],
   });
-  const { sesiones, avisos } = await listaSesiones(async () => daemon, entrada, canon);
+  const { sesiones, avisos } = await listaSesiones(async () => daemon, [entrada], canon);
   assert.equal(sesiones.length, 1);
   assert.deepEqual(avisos, ["codex: no está instalado"]);
+});
+
+test("listaSesiones lee el historial una vez para todos los workspaces y los recientes por directorio distinto", async () => {
+  const { daemon, llamadas } = daemonFalso({
+    paginas: [{ entries: [archivado("a1")], pageInfo: { hasMore: false, nextCursor: null } }],
+  });
+  const { sesiones } = await listaSesiones(
+    async () => daemon,
+    [entrada, { workspaceId: "wks_b", cwd: "/otro/sitio" }, { workspaceId: "wks_c", cwd: "/work/proyecto" }],
+    canon,
+  );
+  assert.equal(llamadas.historial.length, 1, "one history read for all workspaces");
+  assert.deepEqual(llamadas.recientes.map((l) => (l as { cwd: string }).cwd), ["/work/proyecto", "/otro/sitio"], "one read per distinct cwd");
+  assert.equal(llamadas.cerrado, 1, "one connection for the whole call");
+  assert.ok(
+    sesiones.filter((f) => f.archivada).some((f) => f.workspaceId === "wks_a") && sesiones.filter((f) => f.archivada).some((f) => f.workspaceId === "wks_c"),
+    "the same archived agent is listed under each workspace it belongs to, tagged with its restore destination",
+  );
 });
 
 test("listaSesiones closes the connection and passes the error on when a read fails", async () => {
   for (const fallaEn of ["recientes", "historial"] as const) {
     const { daemon, llamadas } = daemonFalso({ fallaEn });
-    await assert.rejects(() => listaSesiones(async () => daemon, entrada, canon), new RegExp(`falla ${fallaEn}`));
+    await assert.rejects(() => listaSesiones(async () => daemon, [entrada], canon), new RegExp(`falla ${fallaEn}`));
     assert.equal(llamadas.cerrado, 1, fallaEn);
   }
 });

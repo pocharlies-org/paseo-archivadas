@@ -1,15 +1,26 @@
 # paseo-archivadas
 
-A Paseo plugin: one button in the header of every workspace that lists what you can bring back into it.
+A Paseo plugin: one button in the header of every workspace that lists what you can bring back — across **all** the
+host's workspaces, so it doubles as a session search (SC-6418).
 
-- the sessions Paseo's own «Importar sesión» sheet shows for the workspace's directory (provider sessions that are not
+- the sessions Paseo's own «Importar sesión» sheet shows for each workspace's directory (provider sessions that are not
   live agents), and
-- every **archived Paseo agent** of that workspace (same workspace id, or the same directory after realpath), in
+- every **archived Paseo agent** of a workspace (same workspace id, or the same directory after realpath), in
   **yellow** with a badge «Archivada · 6 nov».
 
-Tap a row and the session comes back into *this* workspace and opens. An archived agent returns as the very same agent (same
+Tap a row and the session comes back into the workspace of its row and opens. An archived agent returns as the very same agent (same
 id, labels and history); a session never imported becomes a new agent. A search box filters by title and prompts, and
 «archivada» finds the archived ones. Paseo's native «Importar sesión» button is untouched.
+
+### Filters
+
+Under the search box (SC-6418):
+
+- **Time range**: `1 h · 24 h · 7 d · 30 d · todo`, **24 h by default**. A row without a date only survives `todo`.
+- **Archived state**: `todas · archivadas · no archivadas`.
+- **Workspace**: a small box matching a substring of the workspace's name or directory (accents and case ignored).
+- **transcript entero** (only while searching transcripts): reads each transcript without the 64 MB cap, with a 60 s budget
+  per batch instead of 8 s. Without it, the partial limits below apply.
 
 ### Search inside the transcripts
 
@@ -30,7 +41,8 @@ says «Buscar en transcripts…». Off, the search is exactly the one above.
 Limits, on the daemon host: each transcript is streamed line by line, up to **64 MB** per file (a single line over 16 MB,
 an inline image or a huge tool output, is skipped); **4** files are read at a time; one search stops after **8 s**. A
 transcript cut by a limit is reported as «Búsqueda parcial: algunos transcripts no se leyeron enteros»: a session missing
-from the list may still match. The workspace's sessions go to the server in batches of 500. Nothing read is logged.
+from the list may still match (with «transcript entero» only the time budget can cut). The sessions go to the server in
+batches of 500. Nothing read is logged.
 
 An archived agent whose Claude transcript is no longer on disk (or that never had a provider session) is drawn dimmed with
 «sin historial» and cannot be tapped: the daemon cannot resume it.
@@ -59,8 +71,9 @@ like the `paseo` CLI does (`paseo import` is the same `importAgent` call): same 
 loads the daemon's own client module from the daemon install instead of bundling a copy, so it always speaks the protocol of
 the daemon it runs in.
 
-- The list asks for what the native sheet asks (200 sessions of the directory) and pages the whole agent history of the
-  workspace's project to the end.
+- One call covers every workspace the host lists (up to 200): one daemon connection, the archived-agent history read once
+  for all, and the native sheet's listing (200 sessions) once per distinct directory. Past 200 workspaces the list says it
+  is partial.
 - A session that is both importable and archived is one row, and the archived record wins. An archived agent whose session
   is running as a live agent is hidden (importing it would fail).
 - Transcripts are looked up on the daemon host in `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-cwd>/<sessionId>.jsonl`,

@@ -19,7 +19,7 @@ export interface Daemon {
     providerErrors?: { provider: string; message: string }[];
   }>;
   fetchAgentHistory(options: {
-    filter?: { includeArchived?: boolean; projectKeys?: string[] };
+    filter?: { includeArchived?: boolean };
     sort?: { key: "status_priority" | "created_at" | "updated_at" | "title"; direction: "asc" | "desc" }[];
     page?: { limit: number; cursor?: string };
   }): Promise<{

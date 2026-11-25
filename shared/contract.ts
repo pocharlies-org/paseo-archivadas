@@ -4,12 +4,14 @@ import { z } from "zod";
 /**
  * Bounds of what the plugin's server accepts: it parses what comes over the RPC before it touches the disk or the daemon, so a
  * client that is not this plugin's own cannot make it walk an unbounded list or hold an unbounded string. Paths are PATH_MAX;
- * ids (workspace, project, provider, session handle) are far shorter than 200 in every provider. A lookup takes at most
+ * ids (workspace, provider, session handle) are far shorter than 200 in every provider. A lookup takes at most
  * `MAX_COMPROBACIONES` sessions: the client sends a longer list in batches (`enTandas`).
  */
 export const MAX_ID = 200;
 export const MAX_RUTA = 4096;
 export const MAX_COMPROBACIONES = 500;
+/** Workspaces the multi-workspace list takes per call: the host has hundreds, and one call per screen must bound its daemon reads. */
+export const MAX_WORKSPACES = 200;
 /** A transcript search: what is typed is bounded like the search box, and a query shorter than this matches almost everything. */
 export const MAX_CONSULTA = 500;
 export const MIN_CONSULTA = 2;
@@ -42,13 +44,17 @@ export const SesionSchema = z.object({
   archivada: z.object({ agentId: z.string(), archivadaEn: z.string() }).nullable(),
   /** Whether the provider transcript still exists on the daemon host: the daemon cannot resume a session without it (nor an agent that never had one). */
   historial: Historial,
+  /** The workspace this row belongs to: what a restore imports into, and what the workspace filter reads. */
+  workspaceId: Id,
 });
 export type Sesion = z.infer<typeof SesionSchema>;
 
-/** The importable sessions of a workspace merged with its archived agents, newest first. */
+const WorkspaceIn = z.object({ workspaceId: Id, cwd: Ruta }).strict();
+
+/** The importable sessions and archived agents of every workspace asked, merged per workspace, newest first. */
 export const archivadasList = defineRpc({
   name: "archivadas.list",
-  input: z.object({ workspaceId: Id, cwd: Ruta, projectKey: Id.nullable() }).strict(),
+  input: z.object({ workspaces: z.array(WorkspaceIn).max(MAX_WORKSPACES) }).strict(),
   output: z.object({ sesiones: z.array(SesionSchema), avisos: z.array(z.string()) }),
 });
 
@@ -86,10 +92,10 @@ const BusquedaOut = z.object({
 });
 export type BusquedaOut = z.infer<typeof BusquedaOut>;
 
-/** RPC names are lowercase (`[a-z][a-z0-9._-]*`). Searches the text of the user and assistant messages of each session's transcript (never tool input or output). */
+/** RPC names are lowercase (`[a-z][a-z0-9._-]*`). Searches the text of the user and assistant messages of each session's transcript (never tool input or output). With `completo` the whole transcript is read (no byte cap, wider time budget); without it, the partial limits apply. */
 export const transcriptsBuscar = defineRpc({
   name: "archivadas.buscar-transcripts",
-  input: z.object({ query: Consulta, sesiones: z.array(TranscriptIn).max(MAX_COMPROBACIONES) }).strict(),
+  input: z.object({ query: Consulta, sesiones: z.array(TranscriptIn).max(MAX_COMPROBACIONES), completo: z.boolean() }).strict(),
   // One answer per session asked, so no more than the question had.
   output: z.object({ resultados: z.array(BusquedaOut).max(MAX_COMPROBACIONES) }),
 });

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Plugin de Paseo: un botón en la cabecera de cada workspace con las sesiones importables y los agentes archivados, para restaurarlos en ese workspace.",
+  "description": "Plugin de Paseo: un botón en la cabecera de cada workspace con las sesiones importables y los agentes archivados de todos los workspaces, para restaurarlos en el suyo.",
   "license": "MIT",
   "files": [
     "paseo-plugin.json",

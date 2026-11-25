@@ -1,20 +1,23 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
-/** What the list needs of a workspace: where its sessions live and which project its agents belong to. */
+/** What the list needs of a workspace: where its sessions live and its name (the workspace filter matches on it). */
 export interface DatosWorkspace {
   readonly cwd: string;
-  readonly projectKey: string | null;
+  readonly nombre: string;
 }
 
 /** The part of a workspace descriptor the list needs. */
 export interface Descriptor {
   readonly id: string;
-  readonly projectId: string;
   readonly projectRootPath: string;
   readonly workspaceDirectory?: string;
+  readonly name?: string;
   readonly archivingAt?: string | null;
 }
-export const destinoDe = (w: Descriptor): DatosWorkspace => ({ cwd: w.workspaceDirectory ?? w.projectRootPath, projectKey: w.projectId || null });
+export const destinoDe = (w: Descriptor): DatosWorkspace => ({
+  cwd: w.workspaceDirectory ?? w.projectRootPath,
+  nombre: w.name ?? "",
+});
 
 type Paginacion = { readonly hasMore: boolean; readonly nextCursor: string | null };
 type Operacion = (mapa: Map<string, DatosWorkspace>) => void;
@@ -22,7 +25,7 @@ type Operacion = (mapa: Map<string, DatosWorkspace>) => void;
 const TAMANO_PAGINA = 200;
 
 /**
- * Keeps `datos` equal to the workspaces the host lists (directory and project key), and calls `cambio` when it changes.
+ * Keeps `datos` equal to the workspaces the host lists (directory and name), and calls `cambio` when it changes.
  *
  * The subscription's snapshot is only the first page: a host with more workspaces than one page holds has to read the rest.
  * Whenever a snapshot arrives (the first one, and again after a reconnect) the whole new list is built off to the side from

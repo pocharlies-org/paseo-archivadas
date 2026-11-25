@@ -8,6 +8,7 @@ import {
   claveDe,
   clavesDe,
   conHistorial,
+  filtrar,
   conTranscripts,
   desenvuelve,
   esDelWorkspace,
@@ -209,7 +210,7 @@ test("fusionar: a long title (Paseo's title of a session with none is its whole 
 });
 
 test("ordenar: newest first, no date last, ties by key", () => {
-  const base = { providerId: "claude", providerLabel: "c", providerHandleId: "", cwd: "/", titulo: "", resumen: "", ultimoPrompt: "", archivada: null, historial: "si" as const };
+  const base = { providerId: "claude", providerLabel: "c", providerHandleId: "", cwd: "/", titulo: "", resumen: "", ultimoPrompt: "", archivada: null, historial: "si" as const, workspaceId: "w" };
   const f = (clave: string, ultimaActividad: string | null): Sesion => ({ ...base, clave, ultimaActividad });
   const orden = ordenar([f("c", null), f("b", "2026-11-01T00:00:00Z"), f("a", "2026-11-01T00:00:00Z"), f("d", "2026-11-02T00:00:00Z"), f("e", "no es fecha")]);
   assert.deepEqual(
@@ -345,9 +346,32 @@ test("etiquetaArchivada: «Archivada · 6 nov», plus «sin historial» when it 
   assert.equal(etiquetaArchivada(normal as Sesion, AHORA), null);
 });
 
+test("filtrar: rango por última actividad (sin fecha solo sobrevive a «todo»), archivadas y workspace por subcadena", () => {
+  const AHORA = Date.UTC(2026, 10, 23, 12);
+  const hace = (ms: number) => new Date(AHORA - ms).toISOString();
+  const base = { providerId: "claude", providerLabel: "c", providerHandleId: "", cwd: "/work/canary", titulo: "", resumen: "", ultimoPrompt: "", archivada: null, historial: "si" as const };
+  const haceMs = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 } as const;
+  const rec = { ...base, clave: "rec", ultimaActividad: hace(haceMs["1h"] / 2), workspaceId: "w1" };
+  const ayer = { ...base, clave: "ayer", cwd: "/otro", ultimaActividad: hace(haceMs["1h"] * 20), workspaceId: "w2" };
+  const viejo = { ...base, clave: "viejo", cwd: "/otro", ultimaActividad: hace(haceMs["30d"] * 2), workspaceId: "w2" };
+  const sinFecha = { ...base, clave: "sin-fecha", ultimaActividad: null, workspaceId: "w1" };
+  const archiv = { ...base, clave: "arch", cwd: "/otro", ultimaActividad: hace(60_000), workspaceId: "w2", archivada: { agentId: "a", archivadaEn: hace(60_000) } };
+  const sesiones = [rec, ayer, viejo, sinFecha, archiv];
+  const nombre = (id: string) => (id === "w1" ? "Canary" : "Mañana");
+  const f = (x: Partial<import("../shared/sesiones.ts").Filtros>) => filtrar(sesiones, { rango: "24h", archivadas: "todas", workspace: "", nombre, ...x }, AHORA);
+  assert.deepEqual(f({}).map((s) => s.clave), ["rec", "ayer", "arch"], "24 h: sin fecha y viejo fuera");
+  assert.deepEqual(f({ rango: "1h" }).map((s) => s.clave), ["rec", "arch"]);
+  assert.deepEqual(f({ rango: "30d" }).map((s) => s.clave), ["rec", "ayer", "arch"]);
+  assert.deepEqual(f({ rango: "todo" }).map((s) => s.clave), ["rec", "ayer", "viejo", "sin-fecha", "arch"]);
+  assert.deepEqual(f({ rango: "todo", archivadas: "archivadas" }).map((s) => s.clave), ["arch"]);
+  assert.deepEqual(f({ rango: "todo", archivadas: "no" }).map((s) => s.clave).includes("arch"), false);
+  assert.deepEqual(f({ rango: "todo", workspace: "manana" }).map((s) => s.clave), ["ayer", "viejo", "arch"], "sin acentos y sin importar el mayúsculas");
+  assert.deepEqual(f({ rango: "todo", workspace: "/work/canary" }).map((s) => s.clave), ["rec", "sin-fecha"], "también casa con el directorio");
+});
+
 test("subtituloDe: the last prompt, unless it only repeats the title or is not something the user wrote", () => {
   const fila = (titulo: string, ultimoPrompt: string): Sesion => ({
-    clave: "k", providerId: "claude", providerLabel: "c", providerHandleId: "h", cwd: "/", titulo, resumen: "", ultimoPrompt, ultimaActividad: null, archivada: null, historial: "si",
+    clave: "k", providerId: "claude", providerLabel: "c", providerHandleId: "h", cwd: "/", titulo, resumen: "", ultimoPrompt, ultimaActividad: null, archivada: null, historial: "si", workspaceId: "w",
   });
   assert.equal(subtituloDe(fila("Revisa el proyecto", "ahora el segundo punto")), "ahora el segundo punto");
   assert.equal(subtituloDe(fila("Revisa el proyecto", "Revisa el proyecto")), "", "same as the title");

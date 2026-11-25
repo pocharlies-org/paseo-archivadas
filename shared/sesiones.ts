@@ -181,6 +181,7 @@ export function fusionar(input: {
       ultimaActividad: reciente.lastActivityAt,
       archivada: null,
       historial: "si",
+      workspaceId: destino.workspaceId,
     });
   }
   for (const { agente, claves } of grupos.values()) {
@@ -206,6 +207,7 @@ export function fusionar(input: {
       archivada: marca,
       // Nothing proves the transcript is still there: the client asks the daemon host for it.
       historial: "desconocido",
+      workspaceId: destino.workspaceId,
     });
   }
   // An agent archived before it ever had a provider session has nothing to resume: it is listed (it is archived and of this
@@ -225,6 +227,7 @@ export function fusionar(input: {
       ultimaActividad: ultimaActividadDe(agente),
       archivada: { agentId: agente.id, archivadaEn: agente.archivedAt ?? "" },
       historial: "no",
+      workspaceId: destino.workspaceId,
     });
   }
   return ordenar([...filas.values()]);
@@ -321,6 +324,33 @@ export function conTranscripts(sesiones: readonly Sesion[], resultados: readonly
     coincidencias.set(sesion.clave, { coincidencias: resultado.coincidencias, fragmento: resultado.fragmento });
   }
   return { filas, coincidencias, noBuscables, parcial: resultados.some((r) => r.parcial) };
+}
+
+/** The time ranges the list filters by. `todo` keeps everything: archived sessions older than the widest range must stay restorable. */
+export const RANGOS = ["1h", "24h", "7d", "30d", "todo"] as const;
+export type Rango = (typeof RANGOS)[number];
+const MS_DEL_RANGO: Record<Exclude<Rango, "todo">, number> = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 };
+
+export interface Filtros {
+  readonly rango: Rango;
+  /** `todas` keeps both kinds, `archivadas` only the archived rows, `no` only the live ones. */
+  readonly archivadas: "todas" | "archivadas" | "no";
+  /** Substring (case and accents ignored) matched against the workspace's name and directory; empty keeps all. */
+  readonly workspace: string;
+  nombre(workspaceId: string): string;
+}
+
+/** The list cut by the header's filters. A row without a date is never "recent": it only survives `todo`. */
+export function filtrar(sesiones: readonly Sesion[], filtros: Filtros, ahora: number = Date.now()): Sesion[] {
+  const desde = filtros.rango === "todo" ? Number.NEGATIVE_INFINITY : ahora - MS_DEL_RANGO[filtros.rango];
+  const texto = sinAcentos(filtros.workspace.trim());
+  return sesiones.filter((sesion) => {
+    if (msDe(sesion.ultimaActividad) < desde) return false;
+    if (filtros.archivadas === "archivadas" && !sesion.archivada) return false;
+    if (filtros.archivadas === "no" && sesion.archivada) return false;
+    if (texto && !sinAcentos(`${filtros.nombre(sesion.workspaceId)} ${sesion.cwd}`).includes(texto)) return false;
+    return true;
+  });
 }
 
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"] as const;
