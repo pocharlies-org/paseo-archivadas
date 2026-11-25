@@ -9,6 +9,7 @@ import {
   clavesDe,
   conHistorial,
   filtrar,
+  opciones,
   conTranscripts,
   desenvuelve,
   esDelWorkspace,
@@ -346,27 +347,43 @@ test("etiquetaArchivada: «Archivada · 6 nov», plus «sin historial» when it 
   assert.equal(etiquetaArchivada(normal as Sesion, AHORA), null);
 });
 
-test("filtrar: rango por última actividad (sin fecha solo sobrevive a «todo»), archivadas y workspace por subcadena", () => {
+test("filtrar: rango por última actividad (sin fecha solo sobrevive a «todo»), archivadas, proyecto y workspace elegidos", () => {
   const AHORA = Date.UTC(2026, 10, 23, 12);
   const hace = (ms: number) => new Date(AHORA - ms).toISOString();
   const base = { providerId: "claude", providerLabel: "c", providerHandleId: "", cwd: "/work/canary", titulo: "", resumen: "", ultimoPrompt: "", archivada: null, historial: "si" as const };
   const haceMs = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 } as const;
   const rec = { ...base, clave: "rec", ultimaActividad: hace(haceMs["1h"] / 2), workspaceId: "w1" };
   const ayer = { ...base, clave: "ayer", cwd: "/otro", ultimaActividad: hace(haceMs["1h"] * 20), workspaceId: "w2" };
-  const viejo = { ...base, clave: "viejo", cwd: "/otro", ultimaActividad: hace(haceMs["30d"] * 2), workspaceId: "w2" };
+  const viejo = { ...base, clave: "viejo", cwd: "/otro", ultimaActividad: hace(haceMs["30d"] * 2), workspaceId: "w3" };
   const sinFecha = { ...base, clave: "sin-fecha", ultimaActividad: null, workspaceId: "w1" };
   const archiv = { ...base, clave: "arch", cwd: "/otro", ultimaActividad: hace(60_000), workspaceId: "w2", archivada: { agentId: "a", archivadaEn: hace(60_000) } };
   const sesiones = [rec, ayer, viejo, sinFecha, archiv];
-  const nombre = (id: string) => (id === "w1" ? "Canary" : "Mañana");
-  const f = (x: Partial<import("../shared/sesiones.ts").Filtros>) => filtrar(sesiones, { rango: "24h", archivadas: "todas", workspace: "", nombre, ...x }, AHORA);
-  assert.deepEqual(f({}).map((s) => s.clave), ["rec", "ayer", "arch"], "24 h: sin fecha y viejo fuera");
+  const proyectoDe = (id: string) => (id === "w1" ? "p1" : "p2");
+  const f = (x: Partial<import("../shared/sesiones.ts").Filtros>) =>
+    filtrar(sesiones, { rango: "todo", archivadas: "todas", proyecto: null, workspace: null, proyectoDe, ...x }, AHORA);
+  assert.deepEqual(f({ rango: "24h" }).map((s) => s.clave), ["rec", "ayer", "arch"], "24 h: sin fecha y viejo fuera");
   assert.deepEqual(f({ rango: "1h" }).map((s) => s.clave), ["rec", "arch"]);
   assert.deepEqual(f({ rango: "30d" }).map((s) => s.clave), ["rec", "ayer", "arch"]);
-  assert.deepEqual(f({ rango: "todo" }).map((s) => s.clave), ["rec", "ayer", "viejo", "sin-fecha", "arch"]);
-  assert.deepEqual(f({ rango: "todo", archivadas: "archivadas" }).map((s) => s.clave), ["arch"]);
-  assert.deepEqual(f({ rango: "todo", archivadas: "no" }).map((s) => s.clave).includes("arch"), false);
-  assert.deepEqual(f({ rango: "todo", workspace: "manana" }).map((s) => s.clave), ["ayer", "viejo", "arch"], "sin acentos y sin importar el mayúsculas");
-  assert.deepEqual(f({ rango: "todo", workspace: "/work/canary" }).map((s) => s.clave), ["rec", "sin-fecha"], "también casa con el directorio");
+  assert.deepEqual(f({}).map((s) => s.clave), ["rec", "ayer", "viejo", "sin-fecha", "arch"]);
+  assert.deepEqual(f({ archivadas: "archivadas" }).map((s) => s.clave), ["arch"]);
+  assert.deepEqual(f({ archivadas: "no" }).map((s) => s.clave).includes("arch"), false);
+  assert.deepEqual(f({ proyecto: "p2" }).map((s) => s.clave), ["ayer", "viejo", "arch"], "todo el proyecto: sus dos workspaces");
+  assert.deepEqual(f({ proyecto: "p2", workspace: "w2" }).map((s) => s.clave), ["ayer", "arch"], "un workspace del proyecto");
+  assert.deepEqual(f({ workspace: "w1" }).map((s) => s.clave), ["rec", "sin-fecha"]);
+});
+
+test("opciones: los grupos con filas, más filas primero y luego por nombre; el elegido siempre está, con 0 si no tiene", () => {
+  const fila = (clave: string, workspaceId: string) =>
+    ({ clave, workspaceId, providerId: "c", providerLabel: "c", providerHandleId: "", cwd: "/", titulo: "", resumen: "", ultimoPrompt: "", ultimaActividad: null, archivada: null, historial: "si" }) as const;
+  const nombres: Record<string, string> = { a: "Beta", b: "Alfa", c: "Gamma" };
+  const de = (s: { workspaceId: string }) => (s.workspaceId === "x" ? null : { id: s.workspaceId, nombre: nombres[s.workspaceId] ?? "" });
+  const filas = [fila("1", "a"), fila("2", "b"), fila("3", "a"), fila("4", "c"), fila("5", "x")];
+  assert.deepEqual(opciones(filas, de, null), [
+    { id: "a", nombre: "Beta", n: 2 },
+    { id: "b", nombre: "Alfa", n: 1 },
+    { id: "c", nombre: "Gamma", n: 1 },
+  ]);
+  assert.deepEqual(opciones(filas, de, { id: "z", nombre: "Zeta" }).at(-1), { id: "z", nombre: "Zeta", n: 0 });
 });
 
 test("subtituloDe: the last prompt, unless it only repeats the title or is not something the user wrote", () => {

@@ -31,6 +31,8 @@ import {
   enTandas,
   etiquetaArchivada,
   filtrar,
+  opciones,
+  type Opcion,
   hace,
   porComprobar,
   RANGOS,
@@ -151,10 +153,12 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
     const [estado, setEstado] = useState<Estado>({ fase: "cargando" });
     const [texto, setTexto] = useState("");
     const [enTranscripts, setEnTranscripts] = useState(false);
-    // The header's filters (SC-6418): time range (24 h by default), archived state, workspace substring and whole-transcript search.
-    const [rango, setRango] = useState<Rango>("24h");
+    // The header's filters (SC-6418): time range (all by default), archived state, project and workspace selectors (the workspace
+    // the list was opened from by default) and whole-transcript search.
+    const [rango, setRango] = useState<Rango>("todo");
     const [archivadasFiltro, setArchivadasFiltro] = useState<ArchivadasFiltro>("todas");
-    const [wsTexto, setWsTexto] = useState("");
+    const [proyecto, setProyecto] = useState<string | null>(() => datos.get(workspaceId)?.proyectoId ?? null);
+    const [workspace, setWorkspace] = useState<string | null>(workspaceId);
     const [completo, setCompleto] = useState(false);
     // The query a transcript search runs with: set after a pause in the typing or on Enter, so the search does not follow
     // every keystroke. Null when not searching transcripts.
@@ -252,11 +256,40 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
       return () => clearTimeout(espera);
     }, [texto, enTranscripts]);
 
+    // The selectors count what the range and archived filters leave; the list is that cut to the picked project and workspace.
+    const proyectoDe = (id: string) => datos.get(id)?.proyectoId ?? null;
+    const enRango = useMemo(
+      () => filtrar(todas, { rango, archivadas: archivadasFiltro, proyecto: null, workspace: null, proyectoDe }),
+      [todas, rango, archivadasFiltro],
+    );
+    const proyectos = useMemo(() => {
+      const de = (id: string) => {
+        const d = datos.get(id);
+        return d?.proyectoId ? { id: d.proyectoId, nombre: d.proyecto || d.proyectoId } : null;
+      };
+      const elegido = proyecto ? [...datos.keys()].map(de).find((p) => p?.id === proyecto) ?? { id: proyecto, nombre: proyecto } : null;
+      return opciones(enRango, (s) => de(s.workspaceId), elegido);
+    }, [enRango, proyecto]);
+    const workspaces = useMemo(() => {
+      const de = (id: string) => ({ id, nombre: datos.get(id)?.nombre || id });
+      const delProyecto = enRango.filter((s) => proyecto === null || proyectoDe(s.workspaceId) === proyecto);
+      return opciones(delProyecto, (s) => de(s.workspaceId), workspace ? de(workspace) : null);
+    }, [enRango, proyecto, workspace]);
     // The list the filters leave: what the text search, the transcript search and the rows read from.
     const base = useMemo(
-      () => filtrar(todas, { rango, archivadas: archivadasFiltro, workspace: wsTexto, nombre: (id) => datos.get(id)?.nombre ?? id }),
-      [todas, rango, archivadasFiltro, wsTexto],
+      () => filtrar(enRango, { rango: "todo", archivadas: "todas", proyecto, workspace, proyectoDe }),
+      [enRango, proyecto, workspace],
     );
+    const eligeProyecto = (id: string | null) => {
+      setProyecto(id);
+      setWorkspace(null);
+      setVisibles(FILAS_POR_TANDA);
+    };
+    const eligeWorkspace = (id: string | null) => {
+      setWorkspace(id);
+      if (id) setProyecto(proyectoDe(id));
+      setVisibles(FILAS_POR_TANDA);
+    };
 
     // One search per query (and per filtered list): a newer query cancels this one's answer, which is then dropped.
     useEffect(() => {
@@ -329,26 +362,14 @@ export function contributeArchivadas(client: PluginClientContext): () => void {
               {ETIQUETA_ARCHIVADAS[a]}
             </Chip>
           ))}
-          <TextInput
-            value={wsTexto}
-            onChangeText={setWsTexto}
-            placeholder="workspace…"
-            placeholderTextColor={colores.foregroundMuted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            maxLength={MAX_CONSULTA}
-            accessibilityLabel="Filtrar por workspace"
-            style={[
-              { flex: 1, minWidth: 96, color: colores.foreground, fontSize: 11, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: colores.border, borderRadius: 6, backgroundColor: colores.surface0 },
-              { outlineStyle: "none" } as object,
-            ]}
-          />
           {enTranscripts ? (
             <Chip theme={theme} activo={completo} onPress={() => setCompleto((v) => !v)}>
               transcript entero
             </Chip>
           ) : null}
         </View>
+        <Selector theme={theme} titulo="Proyecto" todas="Todos" elegida={proyecto} opciones={proyectos} onElige={eligeProyecto} />
+        <Selector theme={theme} titulo="Workspace" todas="Todos" elegida={workspace} opciones={workspaces} onElige={eligeWorkspace} />
         {estado.fase === "cargando" ? (
           <Aviso theme={theme} cargando>
             Cargando sesiones…
@@ -540,6 +561,25 @@ function Chip({ theme, activo, onPress, children }: { theme: Tema; activo: boole
     >
       <Text style={{ color: activo ? colors.accent : colors.foregroundMuted, fontSize: 11 }}>{children}</Text>
     </Pressable>
+  );
+}
+
+/** One selector: «Todos» and one chip per option with its row count, in a row that scrolls sideways when it does not fit. */
+function Selector({ theme, titulo, todas, elegida, opciones, onElige }: { theme: Tema; titulo: string; todas: string; elegida: string | null; opciones: readonly Opcion[]; onElige(id: string | null): void }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, width: 66 }}>{titulo}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 4 }} keyboardShouldPersistTaps="handled">
+        <Chip theme={theme} activo={elegida === null} onPress={() => onElige(null)}>
+          {todas}
+        </Chip>
+        {opciones.map((o) => (
+          <Chip key={o.id} theme={theme} activo={elegida === o.id} onPress={() => onElige(o.id)}>
+            {`${o.nombre} · ${o.n}`}
+          </Chip>
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 

@@ -16,9 +16,12 @@ id, labels and history); a session never imported becomes a new agent. A search 
 
 Under the search box (SC-6418):
 
-- **Time range**: `1 h · 24 h · 7 d · 30 d · todo`, **24 h by default**. A row without a date only survives `todo`.
+- **Time range**: `1 h · 24 h · 7 d · 30 d · todo`, **todo by default**. A row without a date only survives `todo`.
 - **Archived state**: `todas · archivadas · no archivadas`.
-- **Workspace**: a small box matching a substring of the workspace's name or directory (accents and case ignored).
+- **Proyecto** and **Workspace**: two chip selectors (`Todos` plus one chip per project or workspace with its row count, the
+  rows the range and archived filters leave). By default the workspace the list was opened from and its project; picking a
+  project shows all of it, picking a workspace narrows to it. Each host's daemon lists its own workspaces: the button of a
+  workspace on atlantic lists atlantic's sessions.
 - **transcript entero** (only while searching transcripts): reads each transcript without the 64 MB cap, with a 60 s budget
   per batch instead of 8 s. Without it, the partial limits below apply.
 
